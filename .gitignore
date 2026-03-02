@@ -1,0 +1,14 @@
+# Dependencies (The big stuff)
+node_modules/
+dist/
+build/
+
+# Environment secrets (The private stuff)
+.env
+.env.local
+
+# Logs and system files
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
