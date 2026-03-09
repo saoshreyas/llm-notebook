@@ -1,12 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { Plus, Keyboard, CircleDot } from 'lucide-react'
+import { toast } from 'sonner'
+
 import NotebookCell from './components/NotebookCell'
 import CommandBar from './components/CommandBar'
 import InfoPanel from './components/InfoPanel'
 
+import { Button } from './components/ui/button'
+import { Badge } from './components/ui/badge'
+import { Separator } from './components/ui/separator'
+import { Toaster } from './components/ui/sonner'
+import { TooltipProvider } from './components/ui/tooltip'
+
 const API = '/api'
 
-// Cell states for the two-stage execution model
-const CELL_STATE = {
+export const CELL_STATE = {
   IDLE: 'idle',
   TRANSLATING: 'translating',
   TRANSLATED: 'translated',
@@ -64,15 +72,16 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Update a single cell in state
   const updateCell = useCallback((cellId, patch) => {
     setCells(prev => prev.map(c => c.id === cellId ? { ...c, ...patch } : c))
   }, [])
 
-  // Stage 1: Translate
   const translateCell = useCallback(async (cellId) => {
     const cell = cells.find(c => c.id === cellId)
-    if (!cell || !cell.input.trim()) return
+    if (!cell || !cell.input.trim()) {
+      toast.warning('Please enter some text before running.')
+      return
+    }
 
     const num = executionCounter + 1
     setExecutionCounter(num)
@@ -102,12 +111,13 @@ export default function App() {
         translatedText: data.translated_text,
         translateTime: data.processing_time,
       })
+      toast.success('Stage 1 complete — press run again to interpret.', { duration: 3000 })
     } catch (err) {
       updateCell(cellId, { state: CELL_STATE.ERROR, error: err.message })
+      toast.error(`Translation failed: ${err.message}`)
     }
   }, [cells, executionCounter, updateCell])
 
-  // Stage 2: Interpret
   const interpretCell = useCallback(async (cellId) => {
     const cell = cells.find(c => c.id === cellId)
     if (!cell || !cell.translatedText) return
@@ -131,12 +141,17 @@ export default function App() {
         balloonImages: data.balloon_images,
         interpretTime: data.processing_time,
       })
+      if (data.balloon_count > 0) {
+        toast.success(`Found ${data.balloon_count} balloon${data.balloon_count !== 1 ? 's' : ''}!`)
+      } else {
+        toast('No balloons found in the text.', { icon: '🔍' })
+      }
     } catch (err) {
       updateCell(cellId, { state: CELL_STATE.ERROR, error: err.message })
+      toast.error(`Interpretation failed: ${err.message}`)
     }
   }, [cells, updateCell])
 
-  // Run cell: translate if idle/error, interpret if translated
   const runCell = useCallback((cellId) => {
     const cell = cells.find(c => c.id === cellId)
     if (!cell) return
@@ -147,7 +162,6 @@ export default function App() {
     }
   }, [cells, translateCell, interpretCell])
 
-  // Clear cell output
   const clearCell = useCallback((cellId) => {
     updateCell(cellId, {
       state: CELL_STATE.IDLE,
@@ -159,9 +173,9 @@ export default function App() {
       translateTime: null,
       interpretTime: null,
     })
+    toast('Cell cleared.', { icon: '🧹', duration: 1500 })
   }, [updateCell])
 
-  // Add cell after a given cell (or at the end)
   const addCellAfter = useCallback((afterId) => {
     setCells(prev => {
       const newCell = createCell()
@@ -170,22 +184,23 @@ export default function App() {
       if (idx === -1) return [...prev, newCell]
       const next = [...prev]
       next.splice(idx + 1, 0, newCell)
-      // Focus the new cell after render
       setTimeout(() => {
         setFocusedCellId(newCell.id)
         cellRefs.current[newCell.id]?.focus()
       }, 50)
       return next
     })
+    toast('Cell added.', { icon: '➕', duration: 1500 })
   }, [])
 
-  // Delete cell
   const deleteCell = useCallback((cellId) => {
     setCells(prev => {
-      if (prev.length <= 1) return prev
+      if (prev.length <= 1) {
+        toast.warning('Cannot delete the last cell.')
+        return prev
+      }
       const idx = prev.findIndex(c => c.id === cellId)
       const next = prev.filter(c => c.id !== cellId)
-      // Focus adjacent cell
       const focusIdx = Math.min(idx, next.length - 1)
       setTimeout(() => {
         const nextCell = next[focusIdx]
@@ -196,9 +211,9 @@ export default function App() {
       }, 50)
       return next
     })
+    toast('Cell deleted.', { icon: '🗑️', duration: 1500 })
   }, [])
 
-  // Set input for a cell
   const setCellInput = useCallback((cellId, input) => {
     updateCell(cellId, { input })
   }, [updateCell])
@@ -206,14 +221,11 @@ export default function App() {
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e) => {
-      // Ctrl+/ — toggle command bar
       if (e.ctrlKey && e.key === '/') {
         e.preventDefault()
         setShowCommandBar(prev => !prev)
         return
       }
-
-      // Esc — close command bar
       if (e.key === 'Escape') {
         if (showCommandBar) {
           e.preventDefault()
@@ -221,31 +233,25 @@ export default function App() {
         }
         return
       }
-
-      // Alt+A — add cell below focused
       if (e.altKey && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault()
         addCellAfter(focusedCellId || cells[cells.length - 1]?.id)
         return
       }
-
-      // Alt+D — delete focused cell
       if (e.altKey && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault()
         if (focusedCellId && cells.length > 1) {
           deleteCell(focusedCellId)
+        } else if (cells.length <= 1) {
+          toast.warning('Cannot delete the last cell.')
         }
         return
       }
-
-      // Shift+Enter — run current focused cell
       if (e.shiftKey && e.key === 'Enter') {
         e.preventDefault()
         if (focusedCellId) runCell(focusedCellId)
         return
       }
-
-      // Ctrl+Enter — run cell and insert new cell below
       if (e.ctrlKey && e.key === 'Enter') {
         e.preventDefault()
         if (focusedCellId) {
@@ -260,120 +266,115 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [focusedCellId, cells, showCommandBar, runCell, addCellAfter, deleteCell])
 
+  const statusVariant = apiStatus.checking ? 'checking' : apiStatus.ok ? 'connected' : 'disconnected'
+
   return (
-    <div className="min-h-screen bg-white">
-      {/* Jupyter-style Header */}
-      <header className="border-b border-[#CFCFCF] bg-white">
-        <div className="flex items-center justify-between px-4 py-2">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                <rect width="28" height="28" rx="4" fill="#FF6B19" />
-                <text x="5" y="20" fontFamily="monospace" fontSize="14" fill="white" fontWeight="bold">Jn</text>
-              </svg>
-              <span className="text-lg font-semibold text-[#333]">Jupyter</span>
-            </div>
-            <span className="text-[#777] text-sm">|</span>
-            <span className="text-sm text-[#333]">Untitled.ipynb</span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {/* API Status */}
-            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono border ${
-              apiStatus.checking
-                ? 'border-gray-300 bg-gray-50 text-gray-500'
-                : apiStatus.ok
-                  ? 'border-green-300 bg-green-50 text-green-700'
-                  : 'border-red-300 bg-red-50 text-red-700'
-            }`}>
-              <span className={`inline-block w-2 h-2 rounded-full ${
-                apiStatus.checking ? 'bg-gray-400' : apiStatus.ok ? 'bg-green-500' : 'bg-red-500'
-              }`} />
-              {apiStatus.message}
-            </div>
-
-            {/* Shortcuts button */}
-            <button
-              onClick={() => setShowCommandBar(true)}
-              className="px-3 py-1.5 text-xs font-medium rounded border border-[#CFCFCF] bg-[#F7F7F7] hover:bg-[#E8E8E8] text-[#333] transition-colors"
-            >
-              Shortcuts
-            </button>
-          </div>
-        </div>
-
-        {/* Jupyter-style toolbar */}
-        <div className="flex items-center gap-1 px-4 py-1.5 bg-[#F7F7F7] border-t border-[#CFCFCF]">
-          <ToolbarButton label="Cell" />
-          <ToolbarButton label="Kernel" />
-          <span className="text-[#CFCFCF] mx-1">|</span>
-          <span className="text-xs text-[#777] font-mono">
-            Two-Stage Processing: Translate → Interpret
-          </span>
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="max-w-[1100px] mx-auto px-4 py-6">
-        {/* Info panel */}
-        <InfoPanel />
-
-        {/* Cells */}
-        <div className="mt-4">
-          {cells.map((cell, index) => (
-            <div key={cell.id}>
-              <NotebookCell
-                ref={(el) => { cellRefs.current[cell.id] = el }}
-                cell={cell}
-                isFocused={focusedCellId === cell.id}
-                onFocus={() => setFocusedCellId(cell.id)}
-                onRun={() => runCell(cell.id)}
-                onClear={() => clearCell(cell.id)}
-                onDelete={() => deleteCell(cell.id)}
-                onInputChange={(val) => setCellInput(cell.id, val)}
-                canDelete={cells.length > 1}
-                cellState={CELL_STATE}
-              />
-
-              {/* Insert Cell Below button between cells */}
-              <div className="flex justify-center py-1 group">
-                <button
-                  onClick={() => addCellAfter(cell.id)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-[#777] hover:text-[#FF6B19] border border-transparent hover:border-[#CFCFCF] rounded px-3 py-0.5 bg-transparent hover:bg-[#F7F7F7]"
-                >
-                  + Insert Cell Below
-                </button>
+    <TooltipProvider delayDuration={300}>
+      <div className="min-h-screen bg-background">
+        {/* Jupyter-style header */}
+        <header className="border-b bg-background sticky top-0 z-40">
+          <div className="flex items-center justify-between px-4 py-2">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <rect width="28" height="28" rx="4" fill="#FF6B19" />
+                  <text x="5" y="20" fontFamily="monospace" fontSize="14" fill="white" fontWeight="bold">Jn</text>
+                </svg>
+                <span className="text-lg font-semibold">Jupyter</span>
               </div>
+              <Separator orientation="vertical" className="h-5" />
+              <span className="text-sm">Untitled.ipynb</span>
             </div>
-          ))}
-        </div>
 
-        {/* Add cell button at bottom */}
-        <div className="flex justify-center mt-4">
-          <button
-            onClick={() => addCellAfter(cells[cells.length - 1]?.id)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded border border-[#CFCFCF] bg-[#F7F7F7] hover:bg-[#E8E8E8] text-[#333] transition-colors"
-          >
-            <span className="text-lg leading-none">+</span> Add Cell
-          </button>
-        </div>
+            <div className="flex items-center gap-2">
+              <Badge variant={statusVariant} className="gap-1.5 font-mono">
+                <CircleDot className="h-2.5 w-2.5" />
+                {apiStatus.message}
+              </Badge>
 
-        {/* Footer */}
-        <footer className="mt-8 pt-4 border-t border-[#E8E8E8] text-center text-xs text-[#999] font-mono">
-          LLM Notebook &middot; FastAPI + vLLM + React &middot; Two-Stage Processing
-        </footer>
-      </main>
+              <Button
+                variant="jupyter-outline"
+                size="sm"
+                onClick={() => setShowCommandBar(true)}
+                className="gap-1.5"
+              >
+                <Keyboard className="h-3.5 w-3.5" />
+                Shortcuts
+              </Button>
+            </div>
+          </div>
 
-      {/* Command bar modal */}
-      {showCommandBar && <CommandBar onClose={() => setShowCommandBar(false)} />}
-    </div>
-  )
-}
+          {/* Toolbar */}
+          <div className="flex items-center gap-1.5 px-4 py-1.5 bg-muted/50 border-t">
+            <Button variant="jupyter-ghost" size="xs">Cell</Button>
+            <Button variant="jupyter-ghost" size="xs">Kernel</Button>
+            <Separator orientation="vertical" className="h-4 mx-1" />
+            <span className="text-xs text-muted-foreground font-mono">
+              Two-Stage Processing: Translate → Interpret
+            </span>
+          </div>
+        </header>
 
-function ToolbarButton({ label }) {
-  return (
-    <button className="px-2.5 py-0.5 text-xs text-[#333] hover:bg-[#E8E8E8] rounded transition-colors">
-      {label}
-    </button>
+        {/* Main content */}
+        <main className="max-w-[1100px] mx-auto px-4 py-6">
+          <InfoPanel />
+
+          <div className="mt-4">
+            {cells.map((cell) => (
+              <div key={cell.id}>
+                <NotebookCell
+                  ref={(el) => { cellRefs.current[cell.id] = el }}
+                  cell={cell}
+                  isFocused={focusedCellId === cell.id}
+                  onFocus={() => setFocusedCellId(cell.id)}
+                  onRun={() => runCell(cell.id)}
+                  onClear={() => clearCell(cell.id)}
+                  onDelete={() => deleteCell(cell.id)}
+                  onInputChange={(val) => setCellInput(cell.id, val)}
+                  canDelete={cells.length > 1}
+                />
+
+                {/* Insert Cell Below */}
+                <div className="flex justify-center py-1 group">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => addCellAfter(cell.id)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-[#FF6B19] gap-1"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Insert Cell Below
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Add Cell */}
+          <div className="flex justify-center mt-4">
+            <Button
+              variant="jupyter-outline"
+              size="default"
+              onClick={() => addCellAfter(cells[cells.length - 1]?.id)}
+              className="gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              Add Cell
+            </Button>
+          </div>
+
+          <Separator className="mt-8" />
+          <footer className="py-4 text-center text-xs text-muted-foreground font-mono">
+            LLM Notebook &middot; FastAPI + vLLM + React &middot; Two-Stage Processing
+          </footer>
+        </main>
+
+        {/* Command bar dialog */}
+        <CommandBar open={showCommandBar} onOpenChange={setShowCommandBar} />
+
+        {/* Toast notifications */}
+        <Toaster position="bottom-right" richColors />
+      </div>
+    </TooltipProvider>
   )
 }
