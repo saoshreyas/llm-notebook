@@ -1,156 +1,100 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-echo "🚀 LLM Notebook - Automated Setup Script"
-echo "=========================================="
+echo "========================================"
+echo "  LLM Notebook - Setup"
+echo "========================================"
 echo ""
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+# ── Preflight checks ──────────────────────────────────────────────
 
-# Check if Python is installed
-echo -e "${BLUE}Checking Python installation...${NC}"
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}❌ Python3 is not installed. Please install Python 3.8+ first.${NC}"
-    exit 1
-fi
+command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required."; exit 1; }
+command -v node    >/dev/null 2>&1 || { echo "ERROR: node is required (v18+)."; exit 1; }
+command -v npm     >/dev/null 2>&1 || { echo "ERROR: npm is required."; exit 1; }
 
-PYTHON_VERSION=$(python3 --version | cut -d' ' -f2)
-echo -e "${GREEN}✓ Python $PYTHON_VERSION found${NC}"
-
-# Check if Node.js is installed
-echo -e "${BLUE}Checking Node.js installation...${NC}"
-if ! command -v node &> /dev/null; then
-    echo -e "${RED}❌ Node.js is not installed. Please install Node.js 18+ first.${NC}"
-    exit 1
-fi
-
-NODE_VERSION=$(node --version)
-echo -e "${GREEN}✓ Node.js $NODE_VERSION found${NC}"
+echo "✓ python3 $(python3 --version 2>&1 | awk '{print $2}')"
+echo "✓ node    $(node --version)"
+echo "✓ npm     $(npm --version)"
 echo ""
 
-# Setup Backend
-echo -e "${BLUE}📦 Setting up Backend...${NC}"
-cd backend
+# ── Backend ────────────────────────────────────────────────────────
 
-echo "Installing Python dependencies..."
-pip install -r requirements.txt --break-system-packages
-
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ Backend dependencies installed${NC}"
-else
-    echo -e "${RED}❌ Failed to install backend dependencies${NC}"
-    exit 1
-fi
-
-echo ""
-echo -e "${YELLOW}⚠️  IMPORTANT: Configure your vLLM server${NC}"
-echo "Edit backend/main.py and update:"
-echo "  - VLLM_BASE_URL"
-echo "  - DEFAULT_MODEL"
-echo ""
-
+echo "── Installing backend dependencies ──"
+cd "$(dirname "$0")/backend"
+pip install -r requirements.txt --break-system-packages -q 2>/dev/null \
+  || pip install -r requirements.txt -q
+echo "✓ Backend dependencies installed"
 cd ..
+echo ""
 
-# Setup Frontend
-echo -e "${BLUE}📦 Setting up Frontend...${NC}"
+# ── Frontend ───────────────────────────────────────────────────────
+
+echo "── Installing frontend dependencies ──"
 cd frontend
-
-echo "Installing Node dependencies..."
-npm install
-
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ Frontend dependencies installed${NC}"
-else
-    echo -e "${RED}❌ Failed to install frontend dependencies${NC}"
-    exit 1
-fi
-
+npm install --silent
+echo "✓ Frontend dependencies installed"
 cd ..
-
-# Create convenience scripts
 echo ""
-echo -e "${BLUE}Creating convenience scripts...${NC}"
 
-# Start backend script
-cat > start-backend.sh << 'EOF'
-#!/bin/bash
-cd backend
-echo "🚀 Starting Backend on http://localhost:8000"
-echo "📖 API Docs: http://localhost:8000/docs"
-python main.py
-EOF
+# ── Convenience scripts ───────────────────────────────────────────
 
+cat > start-backend.sh << 'SCRIPT'
+#!/usr/bin/env bash
+cd "$(dirname "$0")/backend"
+echo "Starting backend on http://localhost:8000 ..."
+python3 main.py
+SCRIPT
 chmod +x start-backend.sh
 
-# Start frontend script
-cat > start-frontend.sh << 'EOF'
-#!/bin/bash
-cd frontend
-echo "🚀 Starting Frontend on http://localhost:3000"
-npm run dev
-EOF
-
+cat > start-frontend.sh << 'SCRIPT'
+#!/usr/bin/env bash
+cd "$(dirname "$0")/frontend"
+echo "Starting frontend on http://localhost:3000 ..."
+npx vite --host 0.0.0.0 --port 3000
+SCRIPT
 chmod +x start-frontend.sh
 
-# Start both script
-cat > start-all.sh << 'EOF'
-#!/bin/bash
-echo "🚀 Starting LLM Notebook (Backend + Frontend)"
-echo "Backend: http://localhost:8000"
-echo "Frontend: http://localhost:3000"
-echo ""
-echo "Press Ctrl+C to stop all servers"
-echo ""
+cat > start-all.sh << 'SCRIPT'
+#!/usr/bin/env bash
+echo "Starting LLM Notebook (backend + frontend) ..."
+cd "$(dirname "$0")"
 
 # Start backend in background
-cd backend
-python main.py &
+bash start-backend.sh &
 BACKEND_PID=$!
-cd ..
 
-# Give backend time to start
-sleep 3
+# Start frontend in foreground
+bash start-frontend.sh
+FRONTEND_STATUS=$?
 
-# Start frontend in background
-cd frontend
-npm run dev &
-FRONTEND_PID=$!
-cd ..
-
-# Wait for user interrupt
-trap "kill $BACKEND_PID $FRONTEND_PID; exit" INT
-wait
-EOF
-
+# Cleanup
+kill $BACKEND_PID 2>/dev/null
+exit $FRONTEND_STATUS
+SCRIPT
 chmod +x start-all.sh
 
-echo -e "${GREEN}✓ Convenience scripts created${NC}"
+echo "✓ Created start-backend.sh"
+echo "✓ Created start-frontend.sh"
+echo "✓ Created start-all.sh"
+echo ""
 
-# Final instructions
+# ── Done ───────────────────────────────────────────────────────────
+
+echo "========================================"
+echo "  Setup complete!"
+echo "========================================"
 echo ""
-echo -e "${GREEN}=========================================="
-echo "✅ Setup Complete!"
-echo -e "==========================================${NC}"
+echo "Quick start:"
+echo "  1. Configure your vLLM server:"
+echo "       export VLLM_BASE_URL=http://your-server:8000/v1"
+echo "       export DEFAULT_MODEL=your-model-name"
 echo ""
-echo -e "${BLUE}Next Steps:${NC}"
+echo "  2. Start everything:"
+echo "       ./start-all.sh"
 echo ""
-echo "1. Configure your vLLM server in backend/main.py"
+echo "  3. Open http://localhost:3000"
 echo ""
-echo "2. Start the application:"
-echo "   ${GREEN}./start-all.sh${NC}          # Start both backend and frontend"
-echo "   ${GREEN}./start-backend.sh${NC}      # Start backend only"
-echo "   ${GREEN}./start-frontend.sh${NC}     # Start frontend only"
+echo "Or start separately:"
+echo "  Terminal 1: ./start-backend.sh"
+echo "  Terminal 2: ./start-frontend.sh"
 echo ""
-echo "3. Open http://localhost:3000 in your browser"
-echo ""
-echo -e "${YELLOW}📚 Documentation:${NC}"
-echo "   - Main README: README.md"
-echo "   - Backend docs: backend/README.md"
-echo "   - Frontend docs: frontend/README.md"
-echo "   - API docs: http://localhost:8000/docs (after starting backend)"
-echo ""
-echo -e "${GREEN}Happy coding! 🎉${NC}"
