@@ -1,21 +1,31 @@
-import { useEffect, useRef } from 'react'
+import {
+  Keyboard, Info, CheckCircle2, XCircle, Circle, Loader2, AlertCircle,
+} from 'lucide-react'
+
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from './ui/dialog'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs'
+import { Badge } from './ui/badge'
+import { Separator } from './ui/separator'
+import { Alert, AlertDescription } from './ui/alert'
 
 const SHORTCUTS = [
-  { keys: ['Shift', 'Enter'], desc: 'Run current cell (translate OR interpret)' },
-  { keys: ['Ctrl', 'Enter'], desc: 'Run cell and insert new cell below' },
-  { keys: ['Alt', 'A'], desc: 'Add new cell below' },
-  { keys: ['Alt', 'D'], desc: 'Delete the focused cell' },
-  { keys: ['Ctrl', '/'], desc: 'Toggle this shortcuts panel' },
-  { keys: ['Esc'], desc: 'Close this dialog' },
+  { keys: ['Shift', 'Enter'], desc: 'Run current cell (translate or interpret)', section: 'execute' },
+  { keys: ['Ctrl', 'Enter'], desc: 'Run cell and insert a new cell below', section: 'execute' },
+  { keys: ['Alt', 'A'], desc: 'Add new cell below the focused cell', section: 'cells' },
+  { keys: ['Alt', 'D'], desc: 'Delete the focused cell', section: 'cells' },
+  { keys: ['Ctrl', '/'], desc: 'Toggle this help panel', section: 'nav' },
+  { keys: ['Esc'], desc: 'Close dialogs and modals', section: 'nav' },
 ]
 
 const STATES = [
-  { icon: '⚪', color: '#999', label: 'Not executed', desc: 'Cell has not been run yet' },
-  { icon: '🔵', color: '#2196F3', label: 'Translating...', desc: 'Stage 1 is running (LLM lowercasing)' },
-  { icon: '🟡', color: '#F0AD4E', label: 'Translated', desc: 'Stage 1 done — run again to interpret' },
-  { icon: '🟣', color: '#9C27B0', label: 'Interpreting...', desc: 'Stage 2 is running (balloon counting)' },
-  { icon: '🟢', color: '#4CAF50', label: 'Complete', desc: 'Both stages finished' },
-  { icon: '🔴', color: '#D9534F', label: 'Error', desc: 'Something went wrong' },
+  { emoji: '⚪', variant: 'idle', icon: Circle, label: 'Not executed', desc: 'Cell has not been run yet' },
+  { emoji: '🔵', variant: 'translating', icon: Loader2, label: 'Translating...', desc: 'Stage 1 is running (LLM lowercasing)' },
+  { emoji: '🟡', variant: 'translated', icon: CheckCircle2, label: 'Translated', desc: 'Stage 1 done — run again to interpret' },
+  { emoji: '🟣', variant: 'interpreting', icon: Loader2, label: 'Interpreting...', desc: 'Stage 2 is running (balloon counting)' },
+  { emoji: '🟢', variant: 'complete', icon: CheckCircle2, label: 'Complete', desc: 'Both stages finished successfully' },
+  { emoji: '🔴', variant: 'error', icon: AlertCircle, label: 'Error', desc: 'Something went wrong during execution' },
 ]
 
 const CAN_DO = [
@@ -32,126 +42,160 @@ const CANNOT_DO = [
   'Delete the last remaining cell (always keep at least 1)',
 ]
 
-export default function CommandBar({ onClose }) {
-  const overlayRef = useRef(null)
-
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
-
+function Kbd({ children }) {
   return (
-    <div
-      ref={overlayRef}
-      onClick={(e) => e.target === overlayRef.current && onClose()}
-      className="fixed inset-0 z-50 bg-black/30 flex items-start justify-center pt-[10vh]"
-    >
-      <div className="bg-white rounded-lg shadow-2xl border border-[#CFCFCF] w-full max-w-[640px] max-h-[75vh] overflow-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-[#CFCFCF] bg-[#F7F7F7] rounded-t-lg">
-          <h2 className="text-sm font-semibold text-[#333]">Keyboard Shortcuts & Help</h2>
-          <button
-            onClick={onClose}
-            className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#E8E8E8] text-[#777] hover:text-[#333] transition-colors text-sm"
-          >
-            ✕
-          </button>
-        </div>
+    <kbd className="px-1.5 py-0.5 text-[11px] font-mono font-medium bg-muted border rounded shadow-sm">
+      {children}
+    </kbd>
+  )
+}
 
-        <div className="p-5 space-y-6">
-          {/* Shortcuts */}
-          <section>
-            <h3 className="text-xs font-semibold text-[#333] uppercase tracking-wider mb-3">
-              Keyboard Shortcuts
-            </h3>
+export default function CommandBar({ open, onOpenChange }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[80vh] overflow-auto p-0">
+        <DialogHeader className="px-6 pt-5 pb-0">
+          <DialogTitle className="flex items-center gap-2">
+            <Keyboard className="h-4 w-4" />
+            Help & Keyboard Shortcuts
+          </DialogTitle>
+          <DialogDescription>
+            Everything you need to know about using the two-stage notebook.
+          </DialogDescription>
+        </DialogHeader>
+
+        <Tabs defaultValue="shortcuts" className="px-6 pb-5">
+          <TabsList className="w-full">
+            <TabsTrigger value="shortcuts" className="flex-1 text-xs">Shortcuts</TabsTrigger>
+            <TabsTrigger value="states" className="flex-1 text-xs">Cell States</TabsTrigger>
+            <TabsTrigger value="guide" className="flex-1 text-xs">User Guide</TabsTrigger>
+          </TabsList>
+
+          {/* Tab: Shortcuts */}
+          <TabsContent value="shortcuts" className="space-y-4">
+            <ShortcutSection title="Execution" shortcuts={SHORTCUTS.filter(s => s.section === 'execute')} />
+            <Separator />
+            <ShortcutSection title="Cell Management" shortcuts={SHORTCUTS.filter(s => s.section === 'cells')} />
+            <Separator />
+            <ShortcutSection title="Navigation" shortcuts={SHORTCUTS.filter(s => s.section === 'nav')} />
+          </TabsContent>
+
+          {/* Tab: Cell States */}
+          <TabsContent value="states" className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Each cell shows its current execution state. The state badge and left border update in real-time.
+            </p>
             <div className="space-y-2">
-              {SHORTCUTS.map((s, i) => (
-                <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-[#F7F7F7]">
-                  <div className="flex items-center gap-1">
-                    {s.keys.map((k, j) => (
-                      <span key={j} className="flex items-center gap-1">
-                        {j > 0 && <span className="text-[#999] text-xs">+</span>}
-                        <kbd className="px-2 py-0.5 text-[11px] font-mono font-medium bg-[#F7F7F7] border border-[#CFCFCF] rounded shadow-sm text-[#333]">
-                          {k}
-                        </kbd>
-                      </span>
-                    ))}
+              {STATES.map((s, i) => {
+                const Icon = s.icon
+                return (
+                  <div key={i} className="flex items-center gap-3 py-2 px-3 rounded-md hover:bg-muted/50">
+                    <Badge variant={s.variant} className="gap-1 min-w-[130px] justify-center">
+                      <Icon className="h-3 w-3" />
+                      {s.label}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">{s.desc}</span>
                   </div>
-                  <span className="text-xs text-[#555]">{s.desc}</span>
+                )
+              })}
+            </div>
+
+            <Separator />
+
+            <div className="text-xs text-muted-foreground space-y-1">
+              <p><strong>Left border colors:</strong></p>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-yellow-500" />
+                  <span>Translated (Stage 1 done)</span>
                 </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-green-500" />
+                  <span>Complete (Stage 2 done)</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-red-500" />
+                  <span>Error</span>
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Tab: User Guide */}
+          <TabsContent value="guide" className="space-y-4">
+            <Alert variant="info">
+              <Info className="h-4 w-4" />
+              <AlertDescription className="text-xs leading-relaxed">
+                <strong>Two-Stage Execution:</strong> Run a cell once to <em>translate</em> (lowercase via LLM).
+                Run it again to <em>interpret</em> (count &ldquo;balloon&rdquo; and generate images).
+                Each stage is a separate execution — this is intentional.
+              </AlertDescription>
+            </Alert>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h4 className="text-xs font-semibold text-green-700 flex items-center gap-1.5 mb-2">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  What you CAN do
+                </h4>
+                <ul className="space-y-1.5">
+                  {CAN_DO.map((item, i) => (
+                    <li key={i} className="text-[11px] text-muted-foreground flex items-start gap-1.5">
+                      <span className="text-green-500 mt-0.5 shrink-0">•</span>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-xs font-semibold text-red-700 flex items-center gap-1.5 mb-2">
+                  <XCircle className="h-3.5 w-3.5" />
+                  What you CANNOT do
+                </h4>
+                <ul className="space-y-1.5">
+                  {CANNOT_DO.map((item, i) => (
+                    <li key={i} className="text-[11px] text-muted-foreground flex items-start gap-1.5">
+                      <span className="text-red-500 mt-0.5 shrink-0">•</span>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="text-xs text-muted-foreground">
+              <strong>Example text to try:</strong>
+              <code className="block mt-1 px-3 py-2 bg-muted rounded-md font-mono text-[11px]">
+                I love BALLOONS! Red Balloon, blue BALLOON.
+              </code>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ShortcutSection({ title, shortcuts }) {
+  return (
+    <div>
+      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{title}</h4>
+      <div className="space-y-1.5">
+        {shortcuts.map((s, i) => (
+          <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-muted/50">
+            <div className="flex items-center gap-1">
+              {s.keys.map((k, j) => (
+                <span key={j} className="flex items-center gap-1">
+                  {j > 0 && <span className="text-muted-foreground text-xs">+</span>}
+                  <Kbd>{k}</Kbd>
+                </span>
               ))}
             </div>
-          </section>
-
-          {/* Cell states */}
-          <section>
-            <h3 className="text-xs font-semibold text-[#333] uppercase tracking-wider mb-3">
-              Cell Execution States
-            </h3>
-            <div className="space-y-2">
-              {STATES.map((s, i) => (
-                <div key={i} className="flex items-center gap-3 py-1.5 px-2 rounded hover:bg-[#F7F7F7]">
-                  <span className="text-sm w-5 text-center">{s.icon}</span>
-                  <span className="text-xs font-semibold min-w-[100px]" style={{ color: s.color }}>
-                    {s.label}
-                  </span>
-                  <span className="text-xs text-[#555]">{s.desc}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Can / Can't do */}
-          <div className="grid grid-cols-2 gap-4">
-            <section>
-              <h3 className="text-xs font-semibold text-green-700 uppercase tracking-wider mb-2">
-                ✓ What you CAN do
-              </h3>
-              <ul className="space-y-1">
-                {CAN_DO.map((item, i) => (
-                  <li key={i} className="text-[11px] text-[#555] flex items-start gap-1.5">
-                    <span className="text-green-500 mt-0.5">•</span>
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section>
-              <h3 className="text-xs font-semibold text-red-700 uppercase tracking-wider mb-2">
-                ✗ What you CANNOT do
-              </h3>
-              <ul className="space-y-1">
-                {CANNOT_DO.map((item, i) => (
-                  <li key={i} className="text-[11px] text-[#555] flex items-start gap-1.5">
-                    <span className="text-red-500 mt-0.5">•</span>
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <span className="text-xs text-muted-foreground">{s.desc}</span>
           </div>
-
-          {/* Two-stage explanation */}
-          <section className="bg-[#D9EDF7] border border-[#BCE8F1] rounded p-3">
-            <h3 className="text-xs font-semibold text-[#31708F] mb-1.5">
-              ℹ Two-Stage Execution
-            </h3>
-            <p className="text-[11px] text-[#31708F] leading-relaxed">
-              <strong>Stage 1 — Translate:</strong> Sends your text to the LLM which converts it to lowercase.
-              The button shows "Translate" and the cell turns yellow when done.
-            </p>
-            <p className="text-[11px] text-[#31708F] leading-relaxed mt-1">
-              <strong>Stage 2 — Interpret:</strong> Run again to count the word "balloon" and generate
-              a balloon image for each occurrence. The cell turns green when complete.
-            </p>
-          </section>
-        </div>
+        ))}
       </div>
     </div>
   )

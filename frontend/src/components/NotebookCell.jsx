@@ -1,55 +1,83 @@
 import { forwardRef, useRef, useImperativeHandle, useEffect } from 'react'
+import { Play, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2, Circle } from 'lucide-react'
+
+import { CELL_STATE } from '../App'
+import { Button } from './ui/button'
+import { Badge } from './ui/badge'
+import { Progress } from './ui/progress'
+import { Alert, AlertTitle, AlertDescription } from './ui/alert'
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip'
+import { Separator } from './ui/separator'
 
 const STATE_CONFIG = {
   idle: {
-    icon: '⚪',
+    icon: Circle,
+    emoji: '⚪',
     label: 'Not executed',
-    color: '#999',
+    badgeVariant: 'idle',
     borderColor: 'transparent',
     spinning: false,
+    progress: 0,
   },
   translating: {
-    icon: '🔵',
+    icon: Loader2,
+    emoji: '🔵',
     label: 'Translating...',
-    color: '#2196F3',
+    badgeVariant: 'translating',
     borderColor: '#2196F3',
     spinning: true,
+    progress: 33,
   },
   translated: {
-    icon: '🟡',
-    label: 'Translated (run again to interpret)',
-    color: '#F0AD4E',
+    icon: CheckCircle2,
+    emoji: '🟡',
+    label: 'Translated — run again to interpret',
+    badgeVariant: 'translated',
     borderColor: '#F0AD4E',
     spinning: false,
+    progress: 50,
   },
   interpreting: {
-    icon: '🟣',
+    icon: Loader2,
+    emoji: '🟣',
     label: 'Interpreting...',
-    color: '#9C27B0',
+    badgeVariant: 'interpreting',
     borderColor: '#9C27B0',
     spinning: true,
+    progress: 75,
   },
   complete: {
-    icon: '🟢',
+    icon: CheckCircle2,
+    emoji: '🟢',
     label: 'Complete',
-    color: '#4CAF50',
+    badgeVariant: 'complete',
     borderColor: '#4CAF50',
     spinning: false,
+    progress: 100,
   },
   error: {
-    icon: '🔴',
+    icon: AlertCircle,
+    emoji: '🔴',
     label: 'Error',
-    color: '#D9534F',
+    badgeVariant: 'error',
     borderColor: '#D9534F',
     spinning: false,
+    progress: 0,
   },
 }
 
+const PROGRESS_COLORS = {
+  translating: 'bg-blue-500',
+  translated: 'bg-yellow-500',
+  interpreting: 'bg-purple-500',
+  complete: 'bg-green-500',
+  error: 'bg-red-500',
+}
+
 const NotebookCell = forwardRef(function NotebookCell(
-  { cell, isFocused, onFocus, onRun, onClear, onDelete, onInputChange, canDelete, cellState },
-  ref
+  { cell, isFocused, onFocus, onRun, onClear, onDelete, onInputChange, canDelete },
+  ref,
 ) {
-  const containerRef = useRef(null)
   const textareaRef = useRef(null)
 
   useImperativeHandle(ref, () => ({
@@ -57,17 +85,22 @@ const NotebookCell = forwardRef(function NotebookCell(
   }))
 
   const cfg = STATE_CONFIG[cell.state] || STATE_CONFIG.idle
+  const StateIcon = cfg.icon
+  const isRunning = cell.state === CELL_STATE.TRANSLATING || cell.state === CELL_STATE.INTERPRETING
+  const showProgress = cell.state !== CELL_STATE.IDLE
 
-  const getButtonLabel = () => {
-    if (cell.state === cellState.TRANSLATING || cell.state === cellState.INTERPRETING) return 'Running...'
-    if (cell.state === cellState.TRANSLATED) return '▶ Interpret'
-    if (cell.state === cellState.COMPLETE) return '▶ Translate'
-    return '▶ Translate'
+  const getRunVariant = () => {
+    if (isRunning || !cell.input.trim()) return 'jupyter-outline'
+    if (cell.state === CELL_STATE.TRANSLATED) return 'interpret'
+    return 'translate'
   }
 
-  const isRunning = cell.state === cellState.TRANSLATING || cell.state === cellState.INTERPRETING
+  const getRunLabel = () => {
+    if (isRunning) return 'Running...'
+    if (cell.state === CELL_STATE.TRANSLATED) return 'Interpret'
+    return 'Translate'
+  }
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = textareaRef.current
     if (ta) {
@@ -77,189 +110,226 @@ const NotebookCell = forwardRef(function NotebookCell(
   }, [cell.input])
 
   const leftBorderColor =
-    cell.state === cellState.TRANSLATED ? '#F0AD4E' :
-    cell.state === cellState.COMPLETE ? '#4CAF50' :
-    cell.state === cellState.ERROR ? '#D9534F' :
+    cell.state === CELL_STATE.TRANSLATED ? '#F0AD4E' :
+    cell.state === CELL_STATE.COMPLETE ? '#4CAF50' :
+    cell.state === CELL_STATE.ERROR ? '#D9534F' :
     'transparent'
 
   return (
     <div
-      ref={containerRef}
       onClick={onFocus}
-      className={`relative border rounded-sm mb-0 transition-all duration-150 ${
-        isFocused ? 'cell-focused' : 'border-[#CFCFCF]'
+      className={`relative border rounded-md mb-0 transition-all duration-150 overflow-hidden ${
+        isFocused ? 'cell-focused' : 'border-border'
       }`}
-      style={{
-        borderLeft: `4px solid ${leftBorderColor}`,
-        background: '#fff',
-      }}
+      style={{ borderLeft: `4px solid ${leftBorderColor}` }}
     >
-      {/* Cell header with state indicator and controls */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[#F7F7F7] border-b border-[#CFCFCF]">
-        <div className="flex items-center gap-3">
-          {/* Execution label */}
-          <span className="font-mono text-xs text-[#999] select-none min-w-[70px]">
+      {/* Cell header */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b">
+        <div className="flex items-center gap-2.5">
+          <span className="font-mono text-xs text-muted-foreground select-none min-w-[70px]">
             In [{cell.executionNumber || ' '}]:
           </span>
 
-          {/* State indicator */}
-          <div className="flex items-center gap-1.5">
-            {cfg.spinning ? (
-              <span className="inline-block w-3.5 h-3.5 border-2 rounded-full animate-spin"
-                style={{
-                  borderColor: `${cfg.color}33`,
-                  borderTopColor: cfg.color,
-                }} />
-            ) : (
-              <span className="text-xs">{cfg.icon}</span>
-            )}
-            <span className="text-[11px] font-medium" style={{ color: cfg.color }}>
-              {cfg.label}
-            </span>
-          </div>
+          {/* State badge */}
+          <Badge variant={cfg.badgeVariant} className="gap-1">
+            <StateIcon className={`h-3 w-3 ${cfg.spinning ? 'animate-spin' : ''}`} />
+            {cfg.label}
+          </Badge>
         </div>
 
         <div className="flex items-center gap-1">
-          <button
-            onClick={(e) => { e.stopPropagation(); onRun() }}
-            disabled={isRunning || !cell.input.trim()}
-            className={`px-2.5 py-1 text-[11px] font-medium rounded border transition-colors ${
-              isRunning || !cell.input.trim()
-                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                : cell.state === cellState.TRANSLATED
-                  ? 'border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100'
-                  : 'border-[#FF6B19]/30 bg-[#FF6B19]/5 text-[#FF6B19] hover:bg-[#FF6B19]/10'
-            }`}
-          >
-            {getButtonLabel()}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={getRunVariant()}
+                size="xs"
+                onClick={(e) => { e.stopPropagation(); onRun() }}
+                disabled={isRunning || !cell.input.trim()}
+                className="gap-1"
+              >
+                {isRunning ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Play className="h-3 w-3" />
+                )}
+                {getRunLabel()}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {cell.state === CELL_STATE.TRANSLATED
+                ? 'Stage 2: Count balloons & generate images (Shift+Enter)'
+                : 'Stage 1: Translate text to lowercase via LLM (Shift+Enter)'}
+            </TooltipContent>
+          </Tooltip>
 
-          <button
-            onClick={(e) => { e.stopPropagation(); onClear() }}
-            disabled={cell.state === cellState.IDLE}
-            className="px-2 py-1 text-[11px] rounded border border-transparent hover:border-[#CFCFCF] text-[#777] hover:text-[#333] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            title="Clear output"
-          >
-            Clear
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="jupyter-ghost"
+                size="icon-sm"
+                onClick={(e) => { e.stopPropagation(); onClear() }}
+                disabled={cell.state === CELL_STATE.IDLE}
+              >
+                <RotateCcw className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Clear output and restart</TooltipContent>
+          </Tooltip>
 
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete() }}
-            disabled={!canDelete}
-            className="px-2 py-1 text-[11px] rounded border border-transparent hover:border-red-200 text-[#777] hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            title={canDelete ? 'Delete cell (Alt+D)' : 'Cannot delete last cell'}
-          >
-            ✕
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="jupyter-ghost"
+                size="icon-sm"
+                onClick={(e) => { e.stopPropagation(); onDelete() }}
+                disabled={!canDelete}
+                className="hover:text-destructive"
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {canDelete ? 'Delete cell (Alt+D)' : 'Cannot delete the last cell'}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
-      {/* Input area */}
+      {/* Progress bar */}
+      {showProgress && (
+        <Progress
+          value={cfg.progress}
+          className="h-0.5 rounded-none"
+          indicatorClassName={PROGRESS_COLORS[cell.state] || 'bg-primary'}
+        />
+      )}
+
+      {/* Input textarea */}
       <div className="relative">
         <textarea
           ref={textareaRef}
           value={cell.input}
           onChange={(e) => onInputChange(e.target.value)}
           onFocus={onFocus}
-          placeholder={'Enter text here... Try: "I love BALLOONS! Red Balloon, blue BALLOON."\n\nShift+Enter to run  •  Alt+A to add cell  •  Ctrl+/ for help'}
-          className="w-full bg-white text-[#333] font-mono text-sm leading-relaxed resize-none outline-none p-3"
+          placeholder={'Enter text here... Try: "I love BALLOONS! Red Balloon, blue BALLOON."\n\nShift+Enter to run  •  Alt+A to add cell  •  Ctrl+/ for shortcuts'}
+          className="w-full bg-background text-foreground font-mono text-sm leading-relaxed resize-none outline-none p-3 placeholder:text-muted-foreground/60"
           style={{ minHeight: '80px' }}
           spellCheck={false}
         />
       </div>
 
       {/* Output area */}
-      {(cell.state !== cellState.IDLE || cell.error) && (
-        <div className="border-t border-[#CFCFCF]">
-          {/* Loading state */}
-          {(cell.state === cellState.TRANSLATING || cell.state === cellState.INTERPRETING) && (
-            <div className="flex items-center gap-3 px-3 py-3 bg-[#FAFAFA]">
-              <span className="inline-block w-4 h-4 border-2 rounded-full animate-spin"
-                style={{
-                  borderColor: `${cfg.color}33`,
-                  borderTopColor: cfg.color,
-                }} />
-              <span className="font-mono text-xs" style={{ color: cfg.color }}>
-                {cell.state === cellState.TRANSLATING ? 'Translating with LLM...' : 'Counting balloons & generating images...'}
+      {(cell.state !== CELL_STATE.IDLE || cell.error) && (
+        <>
+          <Separator />
+
+          {/* Loading indicator */}
+          {isRunning && (
+            <div className="flex items-center gap-3 px-4 py-3 bg-muted/30">
+              <Loader2 className="h-4 w-4 animate-spin" style={{ color: cfg.borderColor }} />
+              <span className="font-mono text-xs" style={{ color: cfg.borderColor }}>
+                {cell.state === CELL_STATE.TRANSLATING
+                  ? 'Translating with LLM...'
+                  : 'Counting balloons & generating images...'}
               </span>
             </div>
           )}
 
-          {/* Error state */}
+          {/* Error */}
           {cell.error && (
-            <div className="px-3 py-3 bg-[#FDF2F2] border-l-4 border-red-400">
-              <div className="flex items-start gap-2">
-                <span className="text-red-500 text-sm">✕</span>
-                <div>
-                  <p className="text-xs font-semibold text-red-700">Error</p>
-                  <p className="text-xs text-red-600 font-mono mt-0.5">{cell.error}</p>
-                </div>
-              </div>
+            <div className="p-3">
+              <Alert variant="error">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle className="text-xs">Execution Error</AlertTitle>
+                <AlertDescription className="text-xs font-mono mt-1">
+                  {cell.error}
+                </AlertDescription>
+              </Alert>
             </div>
           )}
 
-          {/* Translated output */}
-          {cell.translatedText !== null && cell.state !== cellState.TRANSLATING && (
-            <div className="px-3 py-3 bg-[#FAFAFA]">
+          {/* Stage 1 output */}
+          {cell.translatedText !== null && cell.state !== CELL_STATE.TRANSLATING && (
+            <div className="px-4 py-3 bg-muted/20">
               <div className="flex items-center gap-2 mb-2">
-                <span className="font-mono text-xs text-[#999] min-w-[70px]">
+                <span className="font-mono text-xs text-muted-foreground min-w-[70px]">
                   Out [{cell.executionNumber || ' '}]:
                 </span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 font-medium">
+                <Badge variant="stage1" className="text-[10px]">
                   Stage 1: Translation
-                </span>
+                </Badge>
                 {cell.translateTime != null && (
-                  <span className="text-[10px] text-[#999] font-mono">{cell.translateTime}s</span>
+                  <span className="text-[10px] text-muted-foreground font-mono">
+                    {cell.translateTime}s
+                  </span>
                 )}
               </div>
-              <div className="ml-[82px] bg-white border border-[#E8E8E8] rounded p-3 font-mono text-sm text-[#333] leading-relaxed">
+              <div className="ml-[82px] bg-background border rounded-md p-3 font-mono text-sm leading-relaxed">
                 {cell.translatedText}
               </div>
             </div>
           )}
 
-          {/* Balloon output */}
-          {cell.state === cellState.COMPLETE && (
-            <div className="px-3 py-3 bg-[#F5FFF5] border-t border-[#E8E8E8]">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="font-mono text-xs text-[#999] min-w-[70px]">
-                  Out [{cell.executionNumber || ' '}]:
-                </span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-800 font-medium">
-                  Stage 2: Interpretation
-                </span>
-                {cell.interpretTime != null && (
-                  <span className="text-[10px] text-[#999] font-mono">{cell.interpretTime}s</span>
-                )}
-              </div>
+          {/* Stage 2 output */}
+          {cell.state === CELL_STATE.COMPLETE && (
+            <>
+              <Separator />
+              <div className="px-4 py-3 bg-green-50/50">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="font-mono text-xs text-muted-foreground min-w-[70px]">
+                    Out [{cell.executionNumber || ' '}]:
+                  </span>
+                  <Badge variant="stage2" className="text-[10px]">
+                    Stage 2: Interpretation
+                  </Badge>
+                  {cell.interpretTime != null && (
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      {cell.interpretTime}s
+                    </span>
+                  )}
+                </div>
 
-              <div className="ml-[82px]">
-                {cell.balloonCount > 0 ? (
-                  <div>
-                    <p className="text-sm text-[#333] mb-3">
-                      🎈 Found <strong>{cell.balloonCount}</strong> balloon{cell.balloonCount !== 1 ? 's' : ''} in the text!
-                    </p>
-                    <div className="flex flex-wrap gap-3">
-                      {cell.balloonImages.map((uri, i) => (
-                        <div
-                          key={i}
-                          className="animate-float-in hover:scale-110 hover:-translate-y-1 transition-transform duration-200 cursor-pointer"
-                          style={{ animationDelay: `${i * 80}ms` }}
-                        >
-                          <img src={uri} alt={`Balloon ${i + 1}`} className="w-[80px] h-auto drop-shadow-md" />
-                        </div>
-                      ))}
+                <div className="ml-[82px]">
+                  {cell.balloonCount > 0 ? (
+                    <div>
+                      <Alert variant="success" className="mb-3 py-2">
+                        <CheckCircle2 className="h-4 w-4" />
+                        <AlertDescription className="text-sm">
+                          Found <strong>{cell.balloonCount}</strong> balloon{cell.balloonCount !== 1 ? 's' : ''} in the text!
+                        </AlertDescription>
+                      </Alert>
+                      <div className="flex flex-wrap gap-3">
+                        {cell.balloonImages.map((uri, i) => (
+                          <Tooltip key={i}>
+                            <TooltipTrigger asChild>
+                              <div
+                                className="animate-float-in hover:scale-110 hover:-translate-y-1 transition-transform duration-200 cursor-pointer"
+                                style={{ animationDelay: `${i * 80}ms` }}
+                              >
+                                <img
+                                  src={uri}
+                                  alt={`Balloon ${i + 1}`}
+                                  className="w-[80px] h-auto drop-shadow-md"
+                                />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>Balloon {i + 1}</TooltipContent>
+                          </Tooltip>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-[#777] font-mono">
-                    No balloons detected in the text.
-                  </p>
-                )}
+                  ) : (
+                    <Alert variant="info" className="py-2">
+                      <AlertDescription className="text-sm font-mono">
+                        No balloons detected in the text.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </div>
               </div>
-            </div>
+            </>
           )}
-        </div>
+        </>
       )}
     </div>
   )
