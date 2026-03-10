@@ -218,6 +218,10 @@ export default function App() {
     updateCell(cellId, { input })
   }, [updateCell])
 
+  const setTranslatedText = useCallback((cellId, translatedText) => {
+    updateCell(cellId, { translatedText })
+  }, [updateCell])
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e) => {
@@ -328,9 +332,12 @@ export default function App() {
                   isFocused={focusedCellId === cell.id}
                   onFocus={() => setFocusedCellId(cell.id)}
                   onRun={() => runCell(cell.id)}
+                  onTranslate={() => translateCell(cell.id)}
+                  onInterpret={() => interpretCell(cell.id)}
                   onClear={() => clearCell(cell.id)}
                   onDelete={() => deleteCell(cell.id)}
                   onInputChange={(val) => setCellInput(cell.id, val)}
+                  onTranslatedTextChange={(val) => setTranslatedText(cell.id, val)}
                   canDelete={cells.length > 1}
                 />
 
