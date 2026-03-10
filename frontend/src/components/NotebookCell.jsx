@@ -1,5 +1,7 @@
 import { forwardRef, useRef, useImperativeHandle, useEffect } from 'react'
-import { Play, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2, Circle } from 'lucide-react'
+import {
+  Play, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2, Circle, Pencil,
+} from 'lucide-react'
 
 import { CELL_STATE } from '../App'
 import { Button } from './ui/button'
@@ -12,7 +14,6 @@ import { Separator } from './ui/separator'
 const STATE_CONFIG = {
   idle: {
     icon: Circle,
-    emoji: '⚪',
     label: 'Not executed',
     badgeVariant: 'idle',
     borderColor: 'transparent',
@@ -21,7 +22,6 @@ const STATE_CONFIG = {
   },
   translating: {
     icon: Loader2,
-    emoji: '🔵',
     label: 'Translating...',
     badgeVariant: 'translating',
     borderColor: '#2196F3',
@@ -30,8 +30,7 @@ const STATE_CONFIG = {
   },
   translated: {
     icon: CheckCircle2,
-    emoji: '🟡',
-    label: 'Translated — run again to interpret',
+    label: 'Translated — edit below, then interpret',
     badgeVariant: 'translated',
     borderColor: '#F0AD4E',
     spinning: false,
@@ -39,7 +38,6 @@ const STATE_CONFIG = {
   },
   interpreting: {
     icon: Loader2,
-    emoji: '🟣',
     label: 'Interpreting...',
     badgeVariant: 'interpreting',
     borderColor: '#9C27B0',
@@ -48,7 +46,6 @@ const STATE_CONFIG = {
   },
   complete: {
     icon: CheckCircle2,
-    emoji: '🟢',
     label: 'Complete',
     badgeVariant: 'complete',
     borderColor: '#4CAF50',
@@ -57,7 +54,6 @@ const STATE_CONFIG = {
   },
   error: {
     icon: AlertCircle,
-    emoji: '🔴',
     label: 'Error',
     badgeVariant: 'error',
     borderColor: '#D9534F',
@@ -75,10 +71,17 @@ const PROGRESS_COLORS = {
 }
 
 const NotebookCell = forwardRef(function NotebookCell(
-  { cell, isFocused, onFocus, onRun, onClear, onDelete, onInputChange, canDelete },
+  {
+    cell, isFocused, onFocus,
+    onRun, onTranslate, onInterpret,
+    onClear, onDelete,
+    onInputChange, onTranslatedTextChange,
+    canDelete,
+  },
   ref,
 ) {
   const textareaRef = useRef(null)
+  const translatedRef = useRef(null)
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
@@ -87,20 +90,11 @@ const NotebookCell = forwardRef(function NotebookCell(
   const cfg = STATE_CONFIG[cell.state] || STATE_CONFIG.idle
   const StateIcon = cfg.icon
   const isRunning = cell.state === CELL_STATE.TRANSLATING || cell.state === CELL_STATE.INTERPRETING
+  const isTranslating = cell.state === CELL_STATE.TRANSLATING
+  const isInterpreting = cell.state === CELL_STATE.INTERPRETING
   const showProgress = cell.state !== CELL_STATE.IDLE
 
-  const getRunVariant = () => {
-    if (isRunning || !cell.input.trim()) return 'jupyter-outline'
-    if (cell.state === CELL_STATE.TRANSLATED) return 'interpret'
-    return 'translate'
-  }
-
-  const getRunLabel = () => {
-    if (isRunning) return 'Running...'
-    if (cell.state === CELL_STATE.TRANSLATED) return 'Interpret'
-    return 'Translate'
-  }
-
+  // Auto-resize input textarea
   useEffect(() => {
     const ta = textareaRef.current
     if (ta) {
@@ -108,6 +102,15 @@ const NotebookCell = forwardRef(function NotebookCell(
       ta.style.height = Math.max(80, ta.scrollHeight) + 'px'
     }
   }, [cell.input])
+
+  // Auto-resize translated textarea
+  useEffect(() => {
+    const ta = translatedRef.current
+    if (ta) {
+      ta.style.height = 'auto'
+      ta.style.height = Math.max(48, ta.scrollHeight) + 'px'
+    }
+  }, [cell.translatedText])
 
   const leftBorderColor =
     cell.state === CELL_STATE.TRANSLATED ? '#F0AD4E' :
@@ -123,14 +126,12 @@ const NotebookCell = forwardRef(function NotebookCell(
       }`}
       style={{ borderLeft: `4px solid ${leftBorderColor}` }}
     >
-      {/* Cell header */}
+      {/* Cell header — always shows Translate */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b">
         <div className="flex items-center gap-2.5">
           <span className="font-mono text-xs text-muted-foreground select-none min-w-[70px]">
             In [{cell.executionNumber || ' '}]:
           </span>
-
-          {/* State badge */}
           <Badge variant={cfg.badgeVariant} className="gap-1">
             <StateIcon className={`h-3 w-3 ${cfg.spinning ? 'animate-spin' : ''}`} />
             {cfg.label}
@@ -138,27 +139,26 @@ const NotebookCell = forwardRef(function NotebookCell(
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Translate button — always in header */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant={getRunVariant()}
+                variant="translate"
                 size="xs"
-                onClick={(e) => { e.stopPropagation(); onRun() }}
+                onClick={(e) => { e.stopPropagation(); onTranslate() }}
                 disabled={isRunning || !cell.input.trim()}
                 className="gap-1"
               >
-                {isRunning ? (
+                {isTranslating ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
                   <Play className="h-3 w-3" />
                 )}
-                {getRunLabel()}
+                {isTranslating ? 'Translating...' : 'Translate'}
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              {cell.state === CELL_STATE.TRANSLATED
-                ? 'Stage 2: Count balloons & generate images (Shift+Enter)'
-                : 'Stage 1: Translate text to lowercase via LLM (Shift+Enter)'}
+              Stage 1: Translate text to lowercase via LLM (Shift+Enter)
             </TooltipContent>
           </Tooltip>
 
@@ -223,14 +223,12 @@ const NotebookCell = forwardRef(function NotebookCell(
         <>
           <Separator />
 
-          {/* Loading indicator */}
-          {isRunning && (
+          {/* Translating spinner */}
+          {isTranslating && (
             <div className="flex items-center gap-3 px-4 py-3 bg-muted/30">
-              <Loader2 className="h-4 w-4 animate-spin" style={{ color: cfg.borderColor }} />
-              <span className="font-mono text-xs" style={{ color: cfg.borderColor }}>
-                {cell.state === CELL_STATE.TRANSLATING
-                  ? 'Translating with LLM...'
-                  : 'Counting balloons & generating images...'}
+              <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+              <span className="font-mono text-xs text-blue-500">
+                Translating with LLM...
               </span>
             </div>
           )}
@@ -248,8 +246,8 @@ const NotebookCell = forwardRef(function NotebookCell(
             </div>
           )}
 
-          {/* Stage 1 output */}
-          {cell.translatedText !== null && cell.state !== CELL_STATE.TRANSLATING && (
+          {/* Stage 1 output — editable translated text + Interpret button */}
+          {cell.translatedText !== null && !isTranslating && (
             <div className="px-4 py-3 bg-muted/20">
               <div className="flex items-center gap-2 mb-2">
                 <span className="font-mono text-xs text-muted-foreground min-w-[70px]">
@@ -263,10 +261,65 @@ const NotebookCell = forwardRef(function NotebookCell(
                     {cell.translateTime}s
                   </span>
                 )}
+                {cell.state === CELL_STATE.TRANSLATED && (
+                  <Badge variant="outline" className="text-[10px] gap-1 ml-auto text-muted-foreground">
+                    <Pencil className="h-2.5 w-2.5" />
+                    Editable
+                  </Badge>
+                )}
               </div>
-              <div className="ml-[82px] bg-background border rounded-md p-3 font-mono text-sm leading-relaxed">
-                {cell.translatedText}
+
+              <div className="ml-[82px]">
+                {/* Editable textarea for translated text */}
+                <textarea
+                  ref={translatedRef}
+                  value={cell.translatedText}
+                  onChange={(e) => onTranslatedTextChange(e.target.value)}
+                  readOnly={cell.state !== CELL_STATE.TRANSLATED}
+                  className={`w-full bg-background border rounded-md p-3 font-mono text-sm leading-relaxed resize-none outline-none transition-colors ${
+                    cell.state === CELL_STATE.TRANSLATED
+                      ? 'border-yellow-300 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-300 cursor-text'
+                      : 'border-border cursor-default'
+                  }`}
+                  style={{ minHeight: '48px' }}
+                  spellCheck={false}
+                />
+
+                {/* Interpret button — appears here after translation */}
+                {cell.state === CELL_STATE.TRANSLATED && (
+                  <div className="flex items-center gap-3 mt-2.5">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="interpret"
+                          size="sm"
+                          onClick={(e) => { e.stopPropagation(); onInterpret() }}
+                          className="gap-1.5"
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          Interpret
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Stage 2: Count &ldquo;balloon&rdquo; occurrences and generate images (Shift+Enter)
+                      </TooltipContent>
+                    </Tooltip>
+                    <span className="text-[11px] text-muted-foreground">
+                      Edit the text above if needed, then click Interpret or press <kbd className="px-1 py-0.5 bg-muted border rounded text-[10px] font-mono">Shift+Enter</kbd>
+                    </span>
+                  </div>
+                )}
               </div>
+            </div>
+          )}
+
+          {/* Interpreting spinner */}
+          {isInterpreting && (
+            <div className="flex items-center gap-3 px-4 py-3 bg-muted/30">
+              <Loader2 className="h-4 w-4 animate-spin text-purple-500" />
+              <span className="font-mono text-xs text-purple-500">
+                Counting balloons & generating images...
+              </span>
             </div>
           )}
 
