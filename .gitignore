@@ -16,4 +16,4 @@ venv/
 start-backend.sh
 start-frontend.sh
 start-all.sh
-frontend/node_modules
+

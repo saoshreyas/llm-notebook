@@ -1,100 +1,114 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 echo "========================================"
-echo "  LLM Notebook - Setup"
+echo "  LLM Notebook - Production Launcher"
 echo "========================================"
-echo ""
 
-# ── Preflight checks ──────────────────────────────────────────────
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$ROOT_DIR/backend"
+FRONTEND_DIR="$ROOT_DIR/frontend"
+VENV_DIR="$ROOT_DIR/venv"
 
-command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required."; exit 1; }
-command -v node    >/dev/null 2>&1 || { echo "ERROR: node is required (v18+)."; exit 1; }
-command -v npm     >/dev/null 2>&1 || { echo "ERROR: npm is required."; exit 1; }
+BACKEND_PID=""
+FRONTEND_PID=""
 
-echo "✓ python3 $(python3 --version 2>&1 | awk '{print $2}')"
-echo "✓ node    $(node --version)"
-echo "✓ npm     $(npm --version)"
-echo ""
+# ─────────────────────────────────────────
+# Cleanup on exit (CRITICAL)
+# ─────────────────────────────────────────
+cleanup() {
+  echo ""
+  echo "Shutting down services..."
 
-# ── Backend ────────────────────────────────────────────────────────
+  [[ -n "${BACKEND_PID}" ]] && kill "$BACKEND_PID" 2>/dev/null || true
+  [[ -n "${FRONTEND_PID}" ]] && kill "$FRONTEND_PID" 2>/dev/null || true
 
-echo "── Installing backend dependencies ──"
-cd "$(dirname "$0")/backend"
-pip install -r requirements.txt --break-system-packages -q 2>/dev/null \
-  || pip install -r requirements.txt -q
-echo "✓ Backend dependencies installed"
-cd ..
-echo ""
+  echo "Done."
+}
+trap cleanup EXIT INT TERM
 
-# ── Frontend ───────────────────────────────────────────────────────
+# ─────────────────────────────────────────
+# Preflight checks
+# ─────────────────────────────────────────
+command -v python3 >/dev/null || { echo "python3 missing"; exit 1; }
+command -v node >/dev/null || { echo "node missing (install v18+)"; exit 1; }
+command -v npm >/dev/null || { echo "npm missing"; exit 1; }
 
-echo "── Installing frontend dependencies ──"
-cd frontend
-npm install --silent
-echo "✓ Frontend dependencies installed"
-cd ..
-echo ""
+echo "✓ System dependencies OK"
 
-# ── Convenience scripts ───────────────────────────────────────────
+# ─────────────────────────────────────────
+# Python environment (REAL FIX)
+# ─────────────────────────────────────────
+echo "Setting up Python environment..."
 
-cat > start-backend.sh << 'SCRIPT'
-#!/usr/bin/env bash
-cd "$(dirname "$0")/backend"
-echo "Starting backend on http://localhost:8000 ..."
-python3 main.py
-SCRIPT
-chmod +x start-backend.sh
+if [[ ! -d "$VENV_DIR" ]]; then
+  python3 -m venv "$VENV_DIR"
+fi
 
-cat > start-frontend.sh << 'SCRIPT'
-#!/usr/bin/env bash
-cd "$(dirname "$0")/frontend"
-echo "Starting frontend on http://localhost:3000 ..."
-npx vite --host 0.0.0.0 --port 3000
-SCRIPT
-chmod +x start-frontend.sh
+source "$VENV_DIR/bin/activate"
 
-cat > start-all.sh << 'SCRIPT'
-#!/usr/bin/env bash
-echo "Starting LLM Notebook (backend + frontend) ..."
-cd "$(dirname "$0")"
+python -m pip install --upgrade pip -q
+python -m pip install -r "$ROOT_DIR/requirements.txt" -q
 
-# Start backend in background
-bash start-backend.sh &
+echo "✓ Backend dependencies ready"
+
+# ─────────────────────────────────────────
+# Frontend dependencies
+# ─────────────────────────────────────────
+echo "Setting up frontend..."
+
+cd "$FRONTEND_DIR"
+
+if [[ ! -d "node_modules" ]]; then
+  npm install
+fi
+
+echo "✓ Frontend dependencies ready"
+
+# ─────────────────────────────────────────
+# Start backend (stable uvicorn config)
+# ─────────────────────────────────────────
+echo "Starting backend..."
+
+cd "$BACKEND_DIR"
+
+# IMPORTANT: adjust if your entry file differs
+if [[ -f "main.py" ]]; then
+  BACKEND_CMD="main:app"
+elif [[ -f "app.py" ]]; then
+  BACKEND_CMD="app:app"
+else
+  echo "ERROR: Cannot find backend entry point (main.py/app.py)"
+  exit 1
+fi
+
+uvicorn "$BACKEND_CMD" \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --reload &
 BACKEND_PID=$!
 
-# Start frontend in foreground
-bash start-frontend.sh
-FRONTEND_STATUS=$?
+# ─────────────────────────────────────────
+# Start frontend (Vite stable mode)
+# ─────────────────────────────────────────
+echo "Starting frontend..."
 
-# Cleanup
-kill $BACKEND_PID 2>/dev/null
-exit $FRONTEND_STATUS
-SCRIPT
-chmod +x start-all.sh
+cd "$FRONTEND_DIR"
 
-echo "✓ Created start-backend.sh"
-echo "✓ Created start-frontend.sh"
-echo "✓ Created start-all.sh"
+npm run dev -- --host 127.0.0.1 --port 3000 &
+FRONTEND_PID=$!
+
+# ─────────────────────────────────────────
+# Ready state
+# ─────────────────────────────────────────
 echo ""
-
-# ── Done ───────────────────────────────────────────────────────────
-
 echo "========================================"
-echo "  Setup complete!"
+echo "  🚀 SYSTEM RUNNING"
+echo "========================================"
+echo "Frontend → http://localhost:3000"
+echo "Backend  → http://localhost:8000"
+echo "Docs     → http://localhost:8000/docs"
 echo "========================================"
 echo ""
-echo "Quick start:"
-echo "  1. Configure your vLLM server:"
-echo "       export VLLM_BASE_URL=http://your-server:8000/v1"
-echo "       export DEFAULT_MODEL=your-model-name"
-echo ""
-echo "  2. Start everything:"
-echo "       ./start-all.sh"
-echo ""
-echo "  3. Open http://localhost:3000"
-echo ""
-echo "Or start separately:"
-echo "  Terminal 1: ./start-backend.sh"
-echo "  Terminal 2: ./start-frontend.sh"
-echo ""
+
+wait "$BACKEND_PID" "$FRONTEND_PID"
