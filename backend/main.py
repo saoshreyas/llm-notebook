@@ -2,18 +2,33 @@
 LLM Notebook Backend
 FastAPI server with two-stage processing: Translation (lowercase) and Interpretation (balloon counting)
 Connects to vLLM servers via LiteLLM.
+Now also exposes /dsl/run_text and /dsl/check_syntax for NotebookDSL.
 """
 
 import os
 import re
+import sys
 import json
 import time
+from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+# ── DSL import (dsl/ folder must live next to this file) ──────────────────────
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    from dsl.parser import parse_string
+    from dsl.runtime import run_pipeline, make_litellm_caller
+    DSL_AVAILABLE = True
+except ImportError as _dsl_err:
+    DSL_AVAILABLE = False
+    print(f"⚠️  DSL not available: {_dsl_err}")
+    print("   Copy the dsl/ folder into your backend/ directory to enable DSL mode.")
 
 try:
     from litellm import completion
@@ -24,8 +39,8 @@ except ImportError:
 
 app = FastAPI(
     title="LLM Notebook API",
-    description="Two-stage text processing: Translation + Balloon Interpretation",
-    version="2.0.0",
+    description="Two-stage text processing: Translation + Balloon Interpretation + NotebookDSL",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -37,10 +52,10 @@ app.add_middleware(
 )
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
-DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "meta-llama/Llama-2-7b-chat-hf")
+DEFAULT_MODEL  = os.environ.get("DEFAULT_MODEL", "meta-llama/Llama-2-7b-chat-hf")
 
 
-# ── Request / Response Models ──────────────────────────────────────────────
+# ── Request / Response Models ──────────────────────────────────────────────────
 
 class TranslateRequest(BaseModel):
     text: str
@@ -64,49 +79,80 @@ class InterpretResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     litellm_available: bool
+    dsl_available: bool
     vllm_configured: bool
     vllm_base_url: str
     default_model: str
 
+# DSL models
+class DSLTextRequest(BaseModel):
+    source:   str
+    pipeline: Optional[str] = None
+    model:    Optional[str] = None
 
-# ── Endpoints ──────────────────────────────────────────────────────────────
+class DSLCellResult(BaseModel):
+    node_name:    str
+    intent:       str
+    code:         str
+    verified:     bool
+    violations:   List[str]
+    attempts:     int
+    output_type:  Optional[str]
+    duration_sec: float
+    executed:     bool = False
+    exec_output:  Optional[str] = None
+    exec_result:  Optional[str] = None
+    exec_error:   Optional[str] = None
+
+class DSLRunResponse(BaseModel):
+    pipeline_name: str
+    success:       bool
+    total_sec:     float
+    balloon_size:  int
+    cells:         List[DSLCellResult]
+
+
+# ── Health ─────────────────────────────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     return HealthResponse(
         status="healthy",
         litellm_available=LITELLM_AVAILABLE,
-        vllm_configured=VLLM_BASE_URL != "http://localhost:8000/v1"
-            or os.environ.get("VLLM_BASE_URL") is not None,
+        dsl_available=DSL_AVAILABLE,
+        vllm_configured=(
+            VLLM_BASE_URL != "http://localhost:8000/v1"
+            or os.environ.get("VLLM_BASE_URL") is not None
+        ),
         vllm_base_url=VLLM_BASE_URL,
         default_model=DEFAULT_MODEL,
     )
 
-
 @app.get("/")
 async def root():
     return {
-        "message": "LLM Notebook API v2.0",
+        "message": "LLM Notebook API v2.1",
         "endpoints": {
-            "health": "/health",
-            "translate": "/translate",
-            "interpret": "/interpret",
-            "models": "/models",
-            "docs": "/docs",
+            "health":     "/health",
+            "translate":  "/translate",
+            "interpret":  "/interpret",
+            "dsl_run":    "/dsl/run_text",
+            "dsl_check":  "/dsl/check_syntax",
+            "models":     "/models",
+            "docs":       "/docs",
         },
     }
 
+
+# ── Original two-stage endpoints (UNCHANGED) ───────────────────────────────────
 
 @app.post("/translate", response_model=TranslateResponse)
 async def translate_text(request: TranslateRequest):
     """Stage 1: Translate input text to lowercase via LLM."""
     start = time.time()
-
     if not LITELLM_AVAILABLE:
         raise HTTPException(status_code=503, detail="LiteLLM is not installed.")
-
     model_name = request.model or DEFAULT_MODEL
-
     try:
         response = completion(
             model=f"openai/{model_name}",
@@ -123,9 +169,8 @@ async def translate_text(request: TranslateRequest):
             temperature=0.0,
         )
         translated = response.choices[0].message.content.strip()
-    except Exception as exc:
+    except Exception:
         translated = request.text.lower()
-
     return TranslateResponse(
         original_text=request.text,
         translated_text=translated,
@@ -137,9 +182,7 @@ async def translate_text(request: TranslateRequest):
 async def interpret_text(request: InterpretRequest):
     """Stage 2: Count 'balloon' occurrences and generate balloon images."""
     start = time.time()
-
     balloon_count = len(re.findall(r"balloon", request.text, re.IGNORECASE))
-
     balloon_images: List[str] = []
     if balloon_count > 0:
         colors = _get_balloon_colors(balloon_count, request.model)
@@ -147,7 +190,6 @@ async def interpret_text(request: InterpretRequest):
             color = colors[i % len(colors)]
             svg = _balloon_svg(color, i)
             balloon_images.append(f"data:image/svg+xml,{quote(svg)}")
-
     return InterpretResponse(
         text=request.text,
         balloon_count=balloon_count,
@@ -160,14 +202,14 @@ async def interpret_text(request: InterpretRequest):
 async def list_models():
     return {
         "models": [
-            {"id": "meta-llama/Llama-2-7b-chat-hf", "name": "Llama 2 7B Chat"},
-            {"id": "mistralai/Mistral-7B-Instruct-v0.2", "name": "Mistral 7B Instruct"},
+            {"id": "meta-llama/Llama-2-7b-chat-hf",      "name": "Llama 2 7B Chat"},
+            {"id": "mistralai/Mistral-7B-Instruct-v0.2",  "name": "Mistral 7B Instruct"},
         ],
         "default": DEFAULT_MODEL,
     }
 
 
-# Keep the old /process endpoint for backwards compatibility
+# Legacy /process
 class ProcessRequest(BaseModel):
     text: str
     model: Optional[str] = None
@@ -193,7 +235,157 @@ async def process_text(request: ProcessRequest):
     )
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+# ── NEW: DSL endpoints ─────────────────────────────────────────────────────────
+
+@app.post("/dsl/run_text", response_model=DSLRunResponse)
+async def run_dsl_text(request: DSLTextRequest):
+    """
+    Accept raw .ndsl source from the frontend textarea.
+    Parse it, run the generate→verify loop, return all cell results.
+    """
+    if not DSL_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="DSL not available. Copy the dsl/ folder into backend/.",
+        )
+    if not LITELLM_AVAILABLE:
+        raise HTTPException(status_code=503, detail="LiteLLM is not installed.")
+
+    # Parse
+    try:
+        program = parse_string(request.source)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"DSL parse error: {e}")
+
+    if not program.pipelines:
+        raise HTTPException(status_code=400, detail="No pipeline found in source.")
+
+    # Select pipeline
+    if request.pipeline:
+        pipeline = program.get(request.pipeline)
+        if pipeline is None:
+            names = [p.name for p in program.pipelines]
+            raise HTTPException(
+                status_code=404,
+                detail=f"Pipeline '{request.pipeline}' not found. Available: {names}",
+            )
+    else:
+        pipeline = program.pipelines[0]
+
+    # Build LLM caller
+    model = request.model or pipeline.config.model or DEFAULT_MODEL
+    try:
+        llm = make_litellm_caller(model=model, api_base=VLLM_BASE_URL)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    # Run
+    logs: List[str] = []
+    result = run_pipeline(pipeline, llm, log=logs.append)
+
+    return DSLRunResponse(
+        pipeline_name=result.pipeline_name,
+        success=result.success,
+        total_sec=result.total_sec,
+        balloon_size=result.balloon_size,
+        cells=[
+            DSLCellResult(
+                node_name=c.node_name,
+                intent=c.intent,
+                code=c.code,
+                verified=c.verified,
+                violations=c.violations,
+                attempts=c.attempts,
+                output_type=c.output_type,
+                duration_sec=c.duration_sec,
+                executed=c.executed,
+                exec_output=c.exec_output,
+                exec_result=c.exec_result,
+                exec_error=c.exec_error,
+            )
+            for c in result.cells
+        ],
+    )
+
+
+@app.post("/dsl/check_syntax")
+async def check_dsl_syntax(request: DSLTextRequest):
+    """
+    Validate .ndsl syntax without calling the LLM.
+    Called by the frontend on-the-fly as the user types.
+    """
+    if not DSL_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DSL not available.")
+    try:
+        program = parse_string(request.source)
+        return {
+            "valid": True,
+            "pipelines": [
+                {
+                    "name":               p.name,
+                    "nodes":              [n.name for n in p.nodes],
+                    "global_constraints": len(p.global_constraints),
+                }
+                for p in program.pipelines
+            ],
+        }
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+class DSLExecuteRequest(BaseModel):
+    code: str   # the (possibly user-edited) code to run
+
+class DSLExecuteResponse(BaseModel):
+    output: Optional[str]   # combined stdout
+    error:  Optional[str]   # traceback if it crashed
+
+
+@app.post("/dsl/execute", response_model=DSLExecuteResponse)
+async def execute_dsl_code(request: DSLExecuteRequest):
+    """
+    Stage 2: Execute the generated (and possibly user-edited) code.
+    Runs in an isolated namespace, captures stdout and errors.
+    """
+    import io
+    import traceback
+    from contextlib import redirect_stdout, redirect_stderr
+
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+    namespace  = {}
+
+    try:
+        with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+            exec(compile(request.code, "<dsl_execute>", "exec"), namespace)
+
+        stdout_text = stdout_buf.getvalue().strip()
+        stderr_text = stderr_buf.getvalue().strip()
+
+        # Collect any non-dunder, non-callable values as extra output
+        results = []
+        for k, v in namespace.items():
+            if not k.startswith("_") and not callable(v):
+                results.append(f"{k} = {repr(v)}")
+
+        parts = list(filter(None, [stdout_text, stderr_text]))
+        if results:
+            parts.append("\n".join(results))
+
+        return DSLExecuteResponse(
+            output="\n\n".join(parts) if parts else None,
+            error=None,
+        )
+
+    except Exception:
+        tb = traceback.format_exc()
+        return DSLExecuteResponse(
+            output=stdout_buf.getvalue().strip() or None,
+            error=tb.strip(),
+        )
+
+
+# ── Helpers (UNCHANGED) ────────────────────────────────────────────────────────
 
 FALLBACK_COLORS = [
     "#FF6B6B", "#4ECDC4", "#FFE66D", "#95E1D3", "#A8E6CF",
@@ -203,7 +395,6 @@ FALLBACK_COLORS = [
 def _get_balloon_colors(count: int, model: Optional[str] = None) -> List[str]:
     if not LITELLM_AVAILABLE:
         return FALLBACK_COLORS
-
     model_name = model or DEFAULT_MODEL
     try:
         resp = completion(
@@ -259,9 +450,9 @@ def _adjust_brightness(hex_color: str, percent: int) -> str:
 
 if __name__ == "__main__":
     import uvicorn
-
-    print("Starting LLM Notebook Backend v2.0")
+    print("Starting LLM Notebook Backend v2.1 + DSL")
     print(f"  vLLM Server : {VLLM_BASE_URL}")
     print(f"  Model       : {DEFAULT_MODEL}")
+    print(f"  DSL         : {'✓ available' if DSL_AVAILABLE else '✗ not found — copy dsl/ into backend/'}")
     print(f"  API Docs    : http://localhost:8000/docs")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
