@@ -17,3 +17,4 @@ start-frontend.sh
 start-all.sh
 frontend/node_modules
 venv
+.egg-info/
