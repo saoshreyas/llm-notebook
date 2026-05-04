@@ -1,8 +1,8 @@
 """
 LLM Notebook Backend
-FastAPI server with two-stage processing: Translation (lowercase) and Interpretation (balloon counting)
-Connects to vLLM servers via LiteLLM.
-Now also exposes /dsl/run_text and /dsl/check_syntax for NotebookDSL.
+FastAPI server: natural language → NotebookDSL (/dsl/nl_to_dsl), then interpreter
+(parse → generate → verify → execute via /dsl/run_text). Legacy /translate and /interpret remain.
+LiteLLM connects to OpenAI-compatible (vLLM) or provider-prefixed models (e.g. huggingface/...).
 """
 
 import os
@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 try:
     from dsl.parser import parse_string
+    from dsl.prompt_loader import DSL_CHEAT_SHEET, render_template
     from dsl.runtime import run_pipeline, make_litellm_caller
     DSL_AVAILABLE = True
 except ImportError as _dsl_err:
@@ -52,7 +53,69 @@ app.add_middleware(
 )
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
-DEFAULT_MODEL  = os.environ.get("DEFAULT_MODEL", "meta-llama/Llama-2-7b-chat-hf")
+DEFAULT_MODEL = os.environ.get(
+    "DEFAULT_MODEL",
+    "meta-llama/Llama-2-7b-chat-hf",
+)
+
+
+def _optional_llm_api_key() -> Optional[str]:
+    return (
+        os.environ.get("HUGGINGFACE_API_KEY")
+        or os.environ.get("HF_TOKEN")
+        or os.environ.get("OPENAI_API_KEY")
+    )
+
+
+def _litellm_api_key() -> str:
+    """LiteLLM's OpenAI client requires a non-empty key; local vLLM ignores placeholders."""
+    return _optional_llm_api_key() or "dummy"
+
+
+def _strip_md_fences(text: str) -> str:
+    s = text.strip()
+    m = re.search(r"```(?:[\w.-]+\s*\n)?([\s\S]*?)```", s)
+    if m:
+        return m.group(1).strip()
+    return s
+
+
+def _raise_if_llm_unreachable(exc: BaseException) -> None:
+    """
+    OpenAI/LiteLLM report connection failures as long chains. Map them to 503
+    so the client sees a clear 'start vLLM / fix VLLM_BASE_URL' message.
+    """
+    seen: set[int] = set()
+    parts: list[str] = []
+    e: Optional[BaseException] = exc
+    while e is not None and id(e) not in seen and len(parts) < 10:
+        seen.add(id(e))
+        parts.append(f"{type(e).__name__}: {e}")
+        e = e.__cause__ or e.__context__
+    blob = " ".join(parts).lower()
+    if not any(
+        s in blob
+        for s in (
+            "10061",
+            "actively refused",
+            "connection refused",
+            "connection error",
+            "failed to establish",
+            "name or service not known",
+            "nodename nor servname",
+            "temporary failure in name resolution",
+        )
+    ):
+        return
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Cannot reach the LLM server at {VLLM_BASE_URL}. "
+            "Start an OpenAI-compatible server (e.g. vLLM) on that host and port, "
+            "or set VLLM_BASE_URL to match it (vLLM chat API is usually …/v1). "
+            f"Original: {parts[0] if parts else exc!r}"
+        ),
+    ) from exc
 
 
 # ── Request / Response Models ──────────────────────────────────────────────────
@@ -112,6 +175,43 @@ class DSLRunResponse(BaseModel):
     cells:         List[DSLCellResult]
 
 
+class NLHistoryItem(BaseModel):
+    """Prior notebook cells for NL→DSL context."""
+    natural_language: Optional[str] = None
+    dsl_source:       Optional[str] = None
+    summary:          Optional[str] = None
+
+
+class NLToDSLRequest(BaseModel):
+    text:               str
+    model:              Optional[str] = None
+    notebook_history:   Optional[List[NLHistoryItem]] = None
+
+
+class NLToDSLResponse(BaseModel):
+    dsl_source:       str
+    processing_time:  float
+    parse_ok:         Optional[bool] = None
+    parse_error:      Optional[str] = None
+    parse_attempts:   int = 1  # LLM calls until parse succeeded or max retries
+
+
+def _format_notebook_history(history: Optional[List[NLHistoryItem]]) -> str:
+    if not history:
+        return "(no prior cells — this is the first request.)"
+    parts: List[str] = []
+    for i, h in enumerate(history, 1):
+        bits = [f"--- prior cell {i} ---"]
+        if h.natural_language:
+            bits.append(f"Natural language: {h.natural_language}")
+        if h.dsl_source:
+            bits.append(f"DSL (.ndsl):\n{h.dsl_source}")
+        if h.summary:
+            bits.append(f"Notes: {h.summary}")
+        parts.append("\n".join(bits))
+    return "\n\n".join(parts)
+
+
 # ── Health ─────────────────────────────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse)
@@ -136,9 +236,11 @@ async def root():
             "health":     "/health",
             "translate":  "/translate",
             "interpret":  "/interpret",
-            "dsl_run":    "/dsl/run_text",
-            "dsl_check":  "/dsl/check_syntax",
-            "models":     "/models",
+            "dsl_run":      "/dsl/run_text",
+            "dsl_nl":       "/dsl/nl_to_dsl",
+            "dsl_check":    "/dsl/check_syntax",
+            "dsl_execute":  "/dsl/execute",
+            "models":       "/models",
             "docs":       "/docs",
         },
     }
@@ -165,6 +267,7 @@ async def translate_text(request: TranslateRequest):
                 ),
             }],
             api_base=VLLM_BASE_URL,
+            api_key=_litellm_api_key(),
             max_tokens=1024,
             temperature=0.0,
         )
@@ -275,13 +378,21 @@ async def run_dsl_text(request: DSLTextRequest):
     # Build LLM caller
     model = request.model or pipeline.config.model or DEFAULT_MODEL
     try:
-        llm = make_litellm_caller(model=model, api_base=VLLM_BASE_URL)
+        llm = make_litellm_caller(
+            model=model,
+            api_base=VLLM_BASE_URL,
+            api_key=_optional_llm_api_key(),
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
     # Run
     logs: List[str] = []
-    result = run_pipeline(pipeline, llm, log=logs.append)
+    try:
+        result = run_pipeline(pipeline, llm, log=logs.append)
+    except Exception as e:
+        _raise_if_llm_unreachable(e)
+        raise
 
     return DSLRunResponse(
         pipeline_name=result.pipeline_name,
@@ -305,6 +416,83 @@ async def run_dsl_text(request: DSLTextRequest):
             )
             for c in result.cells
         ],
+    )
+
+
+@app.post("/dsl/nl_to_dsl", response_model=NLToDSLResponse)
+async def nl_to_dsl(request: NLToDSLRequest):
+    """
+    Translate natural language into NotebookDSL (.ndsl) source.
+    The interpreter (parse + run_pipeline) runs separately — this endpoint
+    only produces the DSL text.
+    """
+    if not DSL_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="DSL not available. Copy the dsl/ folder into backend/.",
+        )
+    if not LITELLM_AVAILABLE:
+        raise HTTPException(status_code=503, detail="LiteLLM is not installed.")
+
+    model = request.model or DEFAULT_MODEL
+    start = time.time()
+    try:
+        llm = make_litellm_caller(
+            model=model,
+            api_base=VLLM_BASE_URL,
+            api_key=_optional_llm_api_key(),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    max_parse = max(1, int(os.environ.get("NL_PARSE_MAX_ATTEMPTS", "3")))
+    system = render_template("nl_to_dsl_system.j2")
+    dsl_source = ""
+    parse_ok: Optional[bool] = None
+    parse_error: Optional[str] = None
+    attempts_used = 0
+
+    for attempt in range(1, max_parse + 1):
+        attempts_used = attempt
+        repair = attempt > 1
+        user = render_template(
+            "nl_to_dsl_user.j2",
+            dsl_cheat_sheet=DSL_CHEAT_SHEET,
+            history_block=_format_notebook_history(request.notebook_history),
+            user_text=request.text.strip(),
+            repair_block=repair,
+            parse_error=parse_error or "",
+            failed_dsl=dsl_source if repair else "",
+            parse_attempt=attempt,
+            parse_max_attempts=max_parse,
+        )
+        try:
+            raw = llm(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ],
+                temperature=0.2 if attempt == 1 else 0.4,
+            )
+        except Exception as e:
+            _raise_if_llm_unreachable(e)
+            raise
+        dsl_source = _strip_md_fences(raw)
+        try:
+            parse_string(dsl_source)
+            parse_ok = True
+            parse_error = None
+            break
+        except Exception as e:
+            parse_ok = False
+            parse_error = str(e)
+
+    return NLToDSLResponse(
+        dsl_source=dsl_source,
+        processing_time=round(time.time() - start, 3),
+        parse_ok=parse_ok,
+        parse_error=parse_error,
+        parse_attempts=attempts_used,
     )
 
 
@@ -407,6 +595,7 @@ def _get_balloon_colors(count: int, model: Optional[str] = None) -> List[str]:
                 ),
             }],
             api_base=VLLM_BASE_URL,
+            api_key=_litellm_api_key(),
             max_tokens=200,
             temperature=0.7,
         )

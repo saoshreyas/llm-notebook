@@ -39,13 +39,23 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
+/** Prior cells for NL→DSL context (same notebook order). */
+function buildNotebookHistory(cells, currentCellId) {
+  const idx = cells.findIndex((c) => c.id === currentCellId)
+  if (idx <= 0) return []
+  return cells.slice(0, idx).map((c) => ({
+    natural_language: c.input?.trim() ? c.input : null,
+    dsl_source: c.dslSource?.trim() ? c.dslSource : null,
+    summary: null,
+  }))
+}
+
 function createCell() {
   return {
     id:              generateId(),
     mode:            'text',        // 'text' | 'dsl'
     // ── text-mode fields ────────────────────────────────────────────────────
     input:           '',
-    translatedText:  null,
     balloonCount:    0,
     balloonImages:   [],
     state:           CELL_STATE.IDLE,
@@ -56,7 +66,7 @@ function createCell() {
     // ── dsl-mode fields ─────────────────────────────────────────────────────
     dslSource:       '',            // what the user writes in the DSL textarea
     dslCells:        null,          // array of node results from Stage 1
-    dslEditableCode: null,          // flat string of all generated code — user edits this
+    dslEditableCode: null,          // merged Python for /dsl/execute — not shown in UI
     dslExecOutput:   null,          // stdout + result from Stage 3
     dslExecError:    null,          // error from Stage 3
     dslGenerateTime: null,
@@ -98,7 +108,7 @@ export default function App() {
     setCells(prev => prev.map(c => c.id === cellId ? { ...c, ...patch } : c))
   }, [])
 
-  // ── Text-mode: Stage 1 translate ───────────────────────────────────────────
+  // ── Text-mode: Stage 1 — natural language → NotebookDSL (.ndsl) ───────────
   const translateCell = useCallback(async (cellId) => {
     const cell = cells.find(c => c.id === cellId)
     if (!cell || !cell.input.trim()) {
@@ -111,80 +121,114 @@ export default function App() {
       state: CELL_STATE.TRANSLATING,
       error: null,
       executionNumber: num,
-      translatedText: null,
       balloonCount: 0,
       balloonImages: [],
       interpretTime: null,
+      dslSource: '',
+      dslCells: null,
+      dslEditableCode: null,
+      dslExecOutput: null,
+      dslExecError: null,
+      dslGenerateTime: null,
+      dslExecTime: null,
     })
     try {
-      const res = await fetch(`${API}/translate`, {
+      const res = await fetch(`${API}/dsl/nl_to_dsl`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: cell.input }),
+        body: JSON.stringify({
+          text: cell.input,
+          notebook_history: buildNotebookHistory(cells, cellId),
+        }),
       })
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Translation failed' }))
-        throw new Error(err.detail || 'Translation failed')
+        const err = await res.json().catch(() => ({ detail: 'NL→DSL failed' }))
+        throw new Error(err.detail || 'NL→DSL failed')
       }
       const data = await res.json()
       updateCell(cellId, {
         state: CELL_STATE.TRANSLATED,
-        translatedText: data.translated_text,
+        dslSource: data.dsl_source,
         translateTime: data.processing_time,
       })
-      toast.success('Stage 1 complete — press run again to interpret.', { duration: 3000 })
+      if (data.parse_ok === false && data.parse_error) {
+        const tries = data.parse_attempts ?? 1
+        toast.warning(
+          `After ${tries} attempt(s) the DSL still does not parse — edit the .ndsl or try again. ${data.parse_error}`,
+          { duration: 8000 },
+        )
+      } else {
+        const attempts = data.parse_attempts ?? 1
+        const sub =
+          attempts > 1
+            ? `Valid after ${attempts} LLM attempt(s) (parse repair). Run again for the interpreter.`
+            : 'Run again to start the interpreter (per-node code, verify, run).'
+        toast.success(sub, { duration: 4000 })
+      }
     } catch (err) {
       updateCell(cellId, { state: CELL_STATE.ERROR, error: err.message })
-      toast.error(`Translation failed: ${err.message}`)
+      toast.error(`NL→DSL failed: ${err.message}`)
     }
   }, [cells, executionCounter, updateCell])
 
-  // ── Text-mode: Stage 2 interpret ──────────────────────────────────────────
+  // ── Text-mode: Stage 2 — DSL → interpreter (generate, verify, run per node) ─
   const interpretCell = useCallback(async (cellId) => {
     const cell = cells.find(c => c.id === cellId)
-    if (!cell || !cell.translatedText) return
-    updateCell(cellId, { state: CELL_STATE.INTERPRETING, error: null })
+    if (!cell || !cell.dslSource?.trim()) {
+      toast.warning('No DSL yet — run Stage 1 first.')
+      return
+    }
+    const t0 = Date.now()
+    updateCell(cellId, {
+      state: CELL_STATE.DSL_GENERATING,
+      error: null,
+      dslCells: null,
+      dslEditableCode: null,
+      dslExecOutput: null,
+      dslExecError: null,
+      dslGenerateTime: null,
+      dslExecTime: null,
+    })
     try {
-      const res = await fetch(`${API}/interpret`, {
+      const res = await fetch(`${API}/dsl/run_text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: cell.translatedText }),
+        body: JSON.stringify({ source: cell.dslSource }),
       })
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Interpretation failed' }))
-        throw new Error(err.detail || 'Interpretation failed')
+        const err = await res.json().catch(() => ({ detail: 'DSL pipeline failed' }))
+        throw new Error(err.detail || 'DSL pipeline failed')
       }
       const data = await res.json()
+      const generateTime = ((Date.now() - t0) / 1000).toFixed(1)
+
+      const editableCode = data.cells
+        .map(node => {
+          const header = `# ── node: ${node.node_name} ──────────────────────────\n# intent: ${node.intent}\n`
+          const status = node.verified ? '' : '# ⚠️  UNVERIFIED\n'
+          return header + status + (node.code || '# (no code generated)')
+        })
+        .join('\n\n')
+
+      const finalState = data.success ? CELL_STATE.DSL_CODE_READY : CELL_STATE.DSL_PARTIAL
       updateCell(cellId, {
-        state: CELL_STATE.COMPLETE,
-        balloonCount: data.balloon_count,
-        balloonImages: data.balloon_images,
-        interpretTime: data.processing_time,
+        state: finalState,
+        dslCells: data.cells,
+        dslEditableCode: editableCode,
+        dslGenerateTime: generateTime,
       })
-      if (data.balloon_count > 0) {
-        toast.success(`Found ${data.balloon_count} balloon${data.balloon_count !== 1 ? 's' : ''}!`)
+
+      if (data.success) {
+        toast.success('Interpreter finished (per-node). Press Run for merged execution output.', { duration: 4000 })
       } else {
-        toast('No balloons found in the text.', { icon: '🔍' })
+        const failed = data.cells.filter(c => !c.verified).length
+        toast.warning(`${failed} node${failed !== 1 ? 's' : ''} failed verification — you can still try Run to see output or errors.`)
       }
     } catch (err) {
-      updateCell(cellId, { state: CELL_STATE.ERROR, error: err.message })
-      toast.error(`Interpretation failed: ${err.message}`)
+      updateCell(cellId, { state: CELL_STATE.DSL_ERROR, error: err.message })
+      toast.error(`Pipeline error: ${err.message}`)
     }
   }, [cells, updateCell])
-
-  const runTextCell = useCallback((cellId) => {
-    const cell = cells.find(c => c.id === cellId)
-    if (!cell) return
-    if (
-      cell.state === CELL_STATE.IDLE ||
-      cell.state === CELL_STATE.ERROR ||
-      cell.state === CELL_STATE.COMPLETE
-    ) {
-      translateCell(cellId)
-    } else if (cell.state === CELL_STATE.TRANSLATED) {
-      interpretCell(cellId)
-    }
-  }, [cells, translateCell, interpretCell])
 
   // ── DSL-mode: Stage 1 — generate + verify code ────────────────────────────
   const dslGenerateCell = useCallback(async (cellId) => {
@@ -241,10 +285,10 @@ export default function App() {
       })
 
       if (data.success) {
-        toast.success(`Code generated — review and edit, then press Run to execute.`, { duration: 4000 })
+        toast.success('Interpreter finished (per-node). Press Run for merged execution output.', { duration: 4000 })
       } else {
         const failed = data.cells.filter(c => !c.verified).length
-        toast.warning(`${failed} node${failed !== 1 ? 's' : ''} failed verification — review before running.`)
+        toast.warning(`${failed} node${failed !== 1 ? 's' : ''} failed verification — you can still try Run.`)
       }
     } catch (err) {
       updateCell(cellId, { state: CELL_STATE.DSL_ERROR, error: err.message })
@@ -296,6 +340,29 @@ export default function App() {
     }
   }, [cells, updateCell])
 
+  // ── Text-mode: combine stages (after dslExecuteCell exists) ───────────────
+  const runTextCell = useCallback((cellId) => {
+    const cell = cells.find(c => c.id === cellId)
+    if (!cell) return
+    const restart = [
+      CELL_STATE.IDLE,
+      CELL_STATE.ERROR,
+      CELL_STATE.COMPLETE,
+      CELL_STATE.DSL_COMPLETE,
+      CELL_STATE.DSL_ERROR,
+    ].includes(cell.state)
+    if (restart) {
+      translateCell(cellId)
+    } else if (cell.state === CELL_STATE.TRANSLATED) {
+      interpretCell(cellId)
+    } else if (
+      cell.state === CELL_STATE.DSL_CODE_READY ||
+      cell.state === CELL_STATE.DSL_PARTIAL
+    ) {
+      dslExecuteCell(cellId)
+    }
+  }, [cells, translateCell, interpretCell, dslExecuteCell])
+
   // ── DSL master run — routes between Stage 1 and Stage 2 ───────────────────
   const runDSLCell = useCallback((cellId) => {
     const cell = cells.find(c => c.id === cellId)
@@ -334,7 +401,6 @@ export default function App() {
       dslEditableCode: null,
       dslExecOutput:   null,
       dslExecError:    null,
-      translatedText:  null,
       balloonCount:    0,
       balloonImages:   [],
     })
@@ -348,7 +414,7 @@ export default function App() {
   const clearCell = useCallback((cellId) => {
     updateCell(cellId, {
       state:           CELL_STATE.IDLE,
-      translatedText:  null,
+      dslSource:       '',
       balloonCount:    0,
       balloonImages:   [],
       error:           null,
@@ -406,9 +472,6 @@ export default function App() {
 
   const setCellInput          = useCallback((id, v) => updateCell(id, { input: v }), [updateCell])
   const setDSLSource          = useCallback((id, v) => updateCell(id, { dslSource: v }), [updateCell])
-  const setDSLEditableCode    = useCallback((id, v) => updateCell(id, { dslEditableCode: v }), [updateCell])
-  const setTranslatedText     = useCallback((id, v) => updateCell(id, { translatedText: v }), [updateCell])
-
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
@@ -468,7 +531,7 @@ export default function App() {
             <Button variant="jupyter-ghost" size="xs">Kernel</Button>
             <Separator orientation="vertical" className="h-4 mx-1" />
             <span className="text-xs text-muted-foreground font-mono">
-              Text: Translate → Interpret · DSL: Generate → Edit → Execute
+              Text: NL → DSL (parse repair) → interpreter → Run for output · DSL: write .ndsl → same
             </span>
           </div>
         </header>
@@ -493,8 +556,6 @@ export default function App() {
                   onToggleMode={() => toggleCellMode(cell.id)}
                   onInputChange={(v) => setCellInput(cell.id, v)}
                   onDSLSourceChange={(v) => setDSLSource(cell.id, v)}
-                  onDSLEditableCodeChange={(v) => setDSLEditableCode(cell.id, v)}
-                  onTranslatedTextChange={(v) => setTranslatedText(cell.id, v)}
                   canDelete={cells.length > 1}
                 />
                 <div className="flex justify-center py-1 group">

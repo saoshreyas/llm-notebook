@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 import traceback
 from contextlib import redirect_stdout, redirect_stderr
@@ -19,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Any
 
 from dsl.ast_nodes import Pipeline, Node, Constraint
+from dsl.prompt_loader import render_template
 
 
 # ── Result types ──────────────────────────────────────────────────────────────
@@ -90,24 +92,53 @@ class RunResult:
 LLMCallable = Callable[[List[dict], float], str]
 
 
+def format_litellm_model(model: str) -> str:
+    """
+    LiteLLM accepts provider-prefixed ids (e.g. huggingface/...) directly.
+    Bare HuggingFace hub ids default to OpenAI-compatible routing via vLLM.
+    """
+    if "/" not in model:
+        return f"openai/{model}"
+    if model.startswith(
+        ("huggingface/", "anthropic/", "openai/", "groq/", "together_ai/", "mistral/")
+    ):
+        return model
+    # HuggingFace Hub id without prefix → assume OpenAI-compatible server (vLLM)
+    return f"openai/{model}"
+
+
 def make_litellm_caller(
     model: str,
     api_base: str,
     max_tokens: int = 1500,
+    api_key: Optional[str] = None,
 ) -> LLMCallable:
     try:
         from litellm import completion
     except ImportError:
         raise RuntimeError("litellm not installed. Run: pip install litellm")
 
+    litellm_model = format_litellm_model(model)
+
+    resolved_key = (
+        api_key
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("HUGGINGFACE_API_KEY")
+        or os.environ.get("HF_TOKEN")
+        or "dummy"
+    )
+    # OpenAI SDK requires a non-empty api_key; vLLM / local OpenAI-compatible servers ignore it.
+
     def call(messages: List[dict], temperature: float = 0.2) -> str:
-        resp = completion(
-            model=f"openai/{model}",
-            messages=messages,
-            api_base=api_base,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        kwargs = {
+            "model": litellm_model,
+            "messages": messages,
+            "api_base": api_base,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "api_key": resolved_key,
+        }
+        resp = completion(**kwargs)
         return resp.choices[0].message.content.strip()
 
     return call
@@ -207,15 +238,20 @@ def _balloon_summary(balloon: List[CellResult]) -> str:
 
 # ── Generator prompt ──────────────────────────────────────────────────────────
 
+def _constraints_text(global_constraints: List[Constraint], node: Node) -> str:
+    all_constraints = global_constraints + node.constraints
+    return "\n".join(f"  - [{c.severity.upper()}] {c.rule}" for c in all_constraints) \
+        or "  (none)"
+
+
 def _generator_prompt(
     node: Node,
     balloon: List[CellResult],
     global_constraints: List[Constraint],
     prior_violations: Optional[List[str]],
+    prior_exec_error: Optional[str],
 ) -> List[dict]:
-    all_constraints = global_constraints + node.constraints
-    c_text = "\n".join(f"  - [{c.severity.upper()}] {c.rule}" for c in all_constraints) \
-             or "  (none)"
+    c_text = _constraints_text(global_constraints, node)
 
     retry_block = ""
     if prior_violations:
@@ -225,6 +261,15 @@ def _generator_prompt(
             + "\nFix every issue above. Do NOT repeat the same mistakes.\n"
         )
 
+    exec_error_block = ""
+    if prior_exec_error:
+        trimmed = prior_exec_error[:4000]
+        exec_error_block = (
+            "\n⚠️  RUNTIME ERROR — the last generated code failed when executed:\n"
+            + trimmed
+            + "\nFix the code so it runs successfully. Preserve intent and constraints.\n"
+        )
+
     input_hint = ""
     if node.inputs:
         input_hint = (
@@ -232,31 +277,21 @@ def _generator_prompt(
             f"{', '.join(node.inputs)}. Use these variable names directly — do not redefine them."
         )
 
-    system = (
-        "You are a constrained Python code generator embedded in a notebook pipeline. "
-        "Output ONLY raw Python — no markdown fences, no explanation, no preamble. "
-        "Every constraint listed MUST be satisfied. "
-        "Write code that can be executed directly with exec(). "
-        "Do NOT use if __name__ == '__main__' guards. "
-        f"Assign the final result to a variable called `{node.name}`."
+    system = render_template(
+        "generator_system.j2",
+        node=node,
     )
-
-    user = f"""
-{_balloon_summary(balloon)}
-
-=== YOUR TASK ===
-Node    : {node.name}
-Intent  : {node.intent}
-Inputs  : {', '.join(node.inputs) if node.inputs else 'none (first node)'}
-Output  : {node.output_type or 'any'}
-{input_hint}
-
-=== CONSTRAINTS (satisfy ALL of these) ===
-{c_text}
-{retry_block}
-Write ONLY the Python code. Assign the final result to a variable called `{node.name}`.
-No markdown, no explanation, no fences.
-""".strip()
+    user = render_template(
+        "generator_user.j2",
+        node=node,
+        balloon_summary=_balloon_summary(balloon),
+        inputs_list=", ".join(node.inputs) if node.inputs else "none (first node)",
+        output_type=node.output_type or "any",
+        input_hint=input_hint,
+        constraints_text=c_text,
+        retry_block=retry_block,
+        exec_error_block=exec_error_block,
+    ).strip()
 
     return [
         {"role": "system", "content": system},
@@ -272,50 +307,17 @@ def _checker_prompt(
     balloon: List[CellResult],
     global_constraints: List[Constraint],
 ) -> List[dict]:
-    all_constraints = global_constraints + node.constraints
-    c_text = "\n".join(f"  - [{c.severity.upper()}] {c.rule}" for c in all_constraints) \
-             or "  (none)"
+    c_text = _constraints_text(global_constraints, node)
 
-    system = (
-        "You are a strict code verifier. "
-        "You read Python code and a list of constraints, then decide if the code passes. "
-        "You respond ONLY with valid JSON — no markdown, no explanation outside the JSON object."
-    )
-
-    user = f"""
-{_balloon_summary(balloon)}
-
-=== CODE TO VERIFY ===
-Node   : {node.name}
-Intent : {node.intent}
-Output : {node.output_type or 'any'}
-
-```python
-{code}
-```
-
-=== CONSTRAINTS TO CHECK ===
-{c_text}
-
-Also check:
-  - Does the code plausibly fulfil the stated intent?
-  - Are all imports real libraries (no hallucinated packages)?
-  - Do input variable names match outputs from prior balloon cells?
-  - Does the output type plausibly match the declared output?
-  - Does the code assign its result to a variable called `{node.name}`?
-
-Respond with ONLY this JSON (no markdown fences):
-{{
-  "passed": true,
-  "violations": []
-}}
-
-or if it fails:
-{{
-  "passed": false,
-  "violations": ["short description of each violation"]
-}}
-""".strip()
+    system = render_template("checker_system.j2")
+    user = render_template(
+        "checker_user.j2",
+        balloon_summary=_balloon_summary(balloon),
+        node=node,
+        code=code,
+        constraints_text=c_text,
+        output_type=node.output_type or "any",
+    ).strip()
 
     return [
         {"role": "system", "content": system},
@@ -347,6 +349,7 @@ def _run_node(
     shared_namespace: dict,
 ) -> CellResult:
     violations: List[str] = []
+    prior_exec_error: Optional[str] = None
     code = ""
     t0 = time.time()
 
@@ -358,6 +361,7 @@ def _run_node(
             balloon=balloon,
             global_constraints=global_constraints,
             prior_violations=violations if attempt > 1 else None,
+            prior_exec_error=prior_exec_error,
         )
         code = llm(gen_msgs, temperature=0.2 if attempt == 1 else 0.45)
 
@@ -379,6 +383,9 @@ def _run_node(
         check = _parse_checker_response(llm(chk_msgs, temperature=0.0))
         violations = check["violations"]
 
+        if not check["passed"]:
+            prior_exec_error = None
+
         if check["passed"]:
             log(f"  ✅ [{node.name}] verified on attempt {attempt} — executing...")
 
@@ -389,6 +396,12 @@ def _run_node(
                 node_name=node.name,
             )
 
+            if exec_info.get("exec_error"):
+                prior_exec_error = exec_info["exec_error"]
+                log(f"  🔁 [{node.name}] execution failed — retrying with traceback feedback...")
+                continue
+
+            prior_exec_error = None
             return CellResult(
                 node_name=node.name,
                 intent=node.intent,
@@ -404,6 +417,18 @@ def _run_node(
         log(f"  ❌ [{node.name}] violations: {violations}")
 
     log(f"  ⚠️  [{node.name}] exhausted {max_retries} retries — not executed")
+    exec_tail: dict = {"executed": False}
+    if prior_exec_error:
+        exec_tail = {
+            "executed": True,
+            "exec_output": None,
+            "exec_result": None,
+            "exec_error": prior_exec_error,
+        }
+        if violations:
+            violations = list(violations) + ["[runtime] execution failed after max retries"]
+        else:
+            violations = ["[runtime] execution failed after max retries"]
     return CellResult(
         node_name=node.name,
         intent=node.intent,
@@ -413,7 +438,7 @@ def _run_node(
         attempts=max_retries,
         output_type=node.output_type,
         duration_sec=round(time.time() - t0, 2),
-        executed=False,
+        **exec_tail,
     )
 
 

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-notebook"
+version = "0.3.0"
+description = "Notebook with NL → NotebookDSL → interpreted Python"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.109.0",
+  "uvicorn[standard]>=0.27.0",
+  "pydantic>=2.6.0",
+  "litellm>=1.17.0",
+  "python-multipart>=0.0.6",
+  "lark>=1.1.0",
+  "jinja2>=3.1.0",
+]
+
+[project.scripts]
+llm-notebook = "cli:main"
+
+[tool.setuptools.package-dir]
+"" = "backend"
+
+[tool.setuptools]
+packages = ["dsl"]
+py-modules = ["main", "cli"]

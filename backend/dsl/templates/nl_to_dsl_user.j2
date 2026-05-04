@@ -1,0 +1,26 @@
+{% if repair_block %}
+=== PARSER REJECTION — FIX SYNTAX (attempt {{ parse_attempt }} / {{ parse_max_attempts }}) ===
+The previous output failed the Lark parser.
+
+Error:
+{{ parse_error }}
+
+Broken output:
+{{ failed_dsl }}
+
+Your task: emit ONE corrected NotebookDSL program that parses and preserves the same user intent below.
+Do not explain — raw program text only, same rules as always.
+
+{% endif %}
+=== NOTEBOOKDSL QUICK REFERENCE ===
+{{ dsl_cheat_sheet }}
+
+=== SESSION / PIPELINE CONTEXT ===
+{{ history_block }}
+
+=== USER REQUEST (natural language) ===
+{{ user_text }}
+
+Produce ONE valid NotebookDSL program that implements this request.
+Use a single `pipeline` with a descriptive name and one or more `node` blocks.
+Each node MUST include `intent:` (quoted string). Use `input:` to list prior node names when chaining.
