@@ -11,7 +11,7 @@ import { Separator } from './ui/separator'
 import { Alert, AlertDescription } from './ui/alert'
 
 const SHORTCUTS = [
-  { keys: ['Shift', 'Enter'], desc: 'Run cell (NL→DSL, interpreter, or execution step)', section: 'execute' },
+  { keys: ['Shift', 'Enter'], desc: 'Run cell (NL→DSL or interpret)', section: 'execute' },
   { keys: ['Ctrl', 'Enter'], desc: 'Run cell and insert a new cell below', section: 'execute' },
   { keys: ['Alt', 'A'], desc: 'Add new cell below the focused cell', section: 'cells' },
   { keys: ['Alt', 'D'], desc: 'Delete the focused cell', section: 'cells' },
@@ -20,26 +20,28 @@ const SHORTCUTS = [
 ]
 
 const STATES = [
-  { emoji: '⚪', variant: 'idle', icon: Circle, label: 'Not executed', desc: 'Cell has not been run yet' },
-  { emoji: '🔵', variant: 'translating', icon: Loader2, label: 'NL → DSL...', desc: 'LLM writes NotebookDSL; server retries if the parser rejects it' },
-  { emoji: '🟡', variant: 'translated', icon: CheckCircle2, label: 'DSL ready', desc: 'Valid .ndsl — run again to start the interpreter' },
-  { emoji: '🟣', variant: 'interpreting', icon: Loader2, label: 'Interpreter...', desc: 'Per node: generate Python, verify, execute; errors fed back in a loop' },
-  { emoji: '🟢', variant: 'complete', icon: CheckCircle2, label: 'Complete', desc: 'Execution finished; see output below' },
-  { emoji: '🔴', variant: 'error', icon: AlertCircle, label: 'Error', desc: 'Something went wrong (network, parse after retries, or runtime)' },
+  { variant: 'idle', icon: Circle, label: 'Not executed', desc: 'Cell has not been run yet' },
+  { variant: 'translating', icon: Loader2, label: 'NL → DSL...', desc: 'LLM writes Workflow DSL; parse repair on failure' },
+  { variant: 'translated', icon: CheckCircle2, label: 'DSL ready', desc: 'Editable .wfl — run again to interpret' },
+  { variant: 'interpreting', icon: Loader2, label: 'Interpreting...', desc: 'Semantic run: prompt→LLM, code→Python' },
+  { variant: 'complete', icon: CheckCircle2, label: 'Complete', desc: 'All nodes succeeded' },
+  { variant: 'error', icon: AlertCircle, label: 'Error', desc: 'Network, parse, or runtime failure' },
 ]
 
 const CAN_DO = [
   'Add unlimited cells (Alt+A or button)',
   'Delete any cell except the last one (Alt+D)',
-  'Run cells in any order',
-  'Re-run cells multiple times',
-  'Clear output and restart the cell',
-  'Edit input text after running',
+  'Edit .wfl after NL→DSL before interpreting',
+  'Write workflows directly in DSL mode',
+  'Chain cells — prior outputs feed later NL→DSL / balloon',
+  'Mix prompt nodes (LLM) and code nodes (your Python)',
   'Use all keyboard shortcuts',
 ]
 
 const CANNOT_DO = [
   'Delete the last remaining cell (always keep at least 1)',
+  'Nest notebook cells — indentation belongs inside .wfl only',
+  'Expect LLM-generated Python from intents (retired — semantic interpret only)',
 ]
 
 function Kbd({ children }) {
@@ -60,7 +62,7 @@ export default function CommandBar({ open, onOpenChange }) {
             Help & Keyboard Shortcuts
           </DialogTitle>
           <DialogDescription>
-            Natural language → DSL → interpreter → output. Shortcuts and cell states.
+            NL → Workflow DSL → semantic interpreter → output
           </DialogDescription>
         </DialogHeader>
 
@@ -71,19 +73,17 @@ export default function CommandBar({ open, onOpenChange }) {
             <TabsTrigger value="guide" className="flex-1 text-xs">User Guide</TabsTrigger>
           </TabsList>
 
-          {/* Tab: Shortcuts */}
           <TabsContent value="shortcuts" className="space-y-4">
-            <ShortcutSection title="Execution" shortcuts={SHORTCUTS.filter(s => s.section === 'execute')} />
+            <ShortcutSection title="Execution" shortcuts={SHORTCUTS.filter((s) => s.section === 'execute')} />
             <Separator />
-            <ShortcutSection title="Cell Management" shortcuts={SHORTCUTS.filter(s => s.section === 'cells')} />
+            <ShortcutSection title="Cell Management" shortcuts={SHORTCUTS.filter((s) => s.section === 'cells')} />
             <Separator />
-            <ShortcutSection title="Navigation" shortcuts={SHORTCUTS.filter(s => s.section === 'nav')} />
+            <ShortcutSection title="Navigation" shortcuts={SHORTCUTS.filter((s) => s.section === 'nav')} />
           </TabsContent>
 
-          {/* Tab: Cell States */}
           <TabsContent value="states" className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Each cell shows its current execution state. The state badge and left border update in real-time.
+              Each cell shows its execution state via badge and left border.
             </p>
             <div className="space-y-2">
               {STATES.map((s, i) => {
@@ -99,36 +99,15 @@ export default function CommandBar({ open, onOpenChange }) {
                 )
               })}
             </div>
-
-            <Separator />
-
-            <div className="text-xs text-muted-foreground space-y-1">
-              <p><strong>Left border colors:</strong></p>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 rounded-sm bg-yellow-500" />
-                  <span>DSL ready</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 rounded-sm bg-green-500" />
-                  <span>Complete</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 rounded-sm bg-red-500" />
-                  <span>Error</span>
-                </div>
-              </div>
-            </div>
           </TabsContent>
 
-          {/* Tab: User Guide */}
           <TabsContent value="guide" className="space-y-4">
             <Alert variant="info">
               <Info className="h-4 w-4" />
               <AlertDescription className="text-xs leading-relaxed">
-                <strong>Pipeline:</strong> First run turns natural language into <em>NotebookDSL</em> (with parse repair).
-                Second run starts the <em>interpreter</em> (generate code per node, verify, run, retry on failures).
-                Third run (when offered) executes merged code so you see full stdout/result text — generated source stays hidden.
+                <strong>Two-phase Text mode:</strong> first run produces editable{' '}
+                <em>Workflow DSL</em>; second run <em>interprets</em> it (LLM for prompt nodes,
+                your Python for code nodes). There is no hidden generated-Python stage.
               </AlertDescription>
             </Alert>
 
@@ -168,7 +147,7 @@ export default function CommandBar({ open, onOpenChange }) {
             <div className="text-xs text-muted-foreground">
               <strong>Example (natural language):</strong>
               <code className="block mt-1 px-3 py-2 bg-muted rounded-md font-mono text-[11px] whitespace-pre-wrap">
-                Build a two-step pipeline: first fetch a short quote as text, then count its words.
+                Build a research agent: plan steps, gather notes, then answer the task. Pass the task as {`{{task}}`}.
               </code>
             </div>
           </TabsContent>

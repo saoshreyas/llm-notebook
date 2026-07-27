@@ -15,62 +15,54 @@ import { TooltipProvider } from './components/ui/tooltip'
 const API = '/api'
 
 export const CELL_STATE = {
-  // ── text-mode states (unchanged) ──────────────────────────────────────────
-  IDLE:         'idle',
-  TRANSLATING:  'translating',
-  TRANSLATED:   'translated',
+  IDLE: 'idle',
+  TRANSLATING: 'translating',
+  TRANSLATED: 'translated',
   INTERPRETING: 'interpreting',
-  COMPLETE:     'complete',
-  ERROR:        'error',
-  // ── DSL-mode states ────────────────────────────────────────────────────────
-  // Stage 1: generating + verifying code
-  DSL_GENERATING:  'dsl_generating',
-  // Stage 2: code ready, user can edit before running
-  DSL_CODE_READY:  'dsl_code_ready',
-  // Stage 3: executing the code
-  DSL_EXECUTING:   'dsl_executing',
-  // Done
-  DSL_COMPLETE:    'dsl_complete',
-  DSL_PARTIAL:     'dsl_partial',   // some nodes failed verification
-  DSL_ERROR:       'dsl_error',
+  COMPLETE: 'complete',
+  PARTIAL: 'partial',
+  ERROR: 'error',
 }
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
-/** Prior cells for NL→DSL context (same notebook order). */
 function buildNotebookHistory(cells, currentCellId) {
   const idx = cells.findIndex((c) => c.id === currentCellId)
   if (idx <= 0) return []
-  return cells.slice(0, idx).map((c) => ({
-    natural_language: c.input?.trim() ? c.input : null,
-    dsl_source: c.dslSource?.trim() ? c.dslSource : null,
-    summary: null,
-  }))
+  return cells.slice(0, idx).map((c) => {
+    const outputs = {}
+    if (c.nodes) {
+      for (const n of c.nodes) {
+        if (n.success && n.output_name && n.output_value != null) {
+          outputs[n.output_name] = n.output_value
+        }
+      }
+    }
+    return {
+      natural_language: c.input?.trim() ? c.input : null,
+      dsl_source: c.dslSource?.trim() ? c.dslSource : null,
+      summary: c.success === false ? 'prior cell had failures' : null,
+      outputs: Object.keys(outputs).length ? outputs : null,
+    }
+  })
 }
 
 function createCell() {
   return {
-    id:              generateId(),
-    mode:            'text',        // 'text' | 'dsl'
-    // ── text-mode fields ────────────────────────────────────────────────────
-    input:           '',
-    balloonCount:    0,
-    balloonImages:   [],
-    state:           CELL_STATE.IDLE,
-    error:           null,
+    id: generateId(),
+    mode: 'text',
+    input: '',
+    state: CELL_STATE.IDLE,
+    error: null,
     executionNumber: null,
-    translateTime:   null,
-    interpretTime:   null,
-    // ── dsl-mode fields ─────────────────────────────────────────────────────
-    dslSource:       '',            // what the user writes in the DSL textarea
-    dslCells:        null,          // array of node results from Stage 1
-    dslEditableCode: null,          // merged Python for /dsl/execute — not shown in UI
-    dslExecOutput:   null,          // stdout + result from Stage 3
-    dslExecError:    null,          // error from Stage 3
-    dslGenerateTime: null,
-    dslExecTime:     null,
+    translateTime: null,
+    interpretTime: null,
+    dslSource: '',
+    nodes: null,
+    success: null,
+    syntaxError: null,
   }
 }
 
@@ -81,18 +73,19 @@ export default function App() {
   const [apiStatus, setApiStatus] = useState({ ok: false, checking: true, message: 'Checking...' })
   const [showCommandBar, setShowCommandBar] = useState(false)
   const cellRefs = useRef({})
+  const syntaxTimers = useRef({})
 
-  // ── Health check ───────────────────────────────────────────────────────────
   useEffect(() => {
     const check = async () => {
       try {
         const res = await fetch(`${API}/health`)
         const data = await res.json()
+        const ready = data.status === 'healthy'
         setApiStatus({
-          ok: data.status === 'healthy',
+          ok: ready,
           checking: false,
-          message: data.status === 'healthy'
-            ? (data.vllm_configured ? 'Connected' : 'API Ready')
+          message: ready
+            ? (data.openrouter_configured ? 'OpenRouter' : (data.vllm_base_url ? 'vLLM' : 'API Ready'))
             : 'Unhealthy',
         })
       } catch {
@@ -105,14 +98,36 @@ export default function App() {
   }, [])
 
   const updateCell = useCallback((cellId, patch) => {
-    setCells(prev => prev.map(c => c.id === cellId ? { ...c, ...patch } : c))
+    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, ...patch } : c)))
   }, [])
 
-  // ── Text-mode: Stage 1 — natural language → NotebookDSL (.ndsl) ───────────
+  const checkSyntax = useCallback(async (cellId, source) => {
+    if (!source?.trim()) {
+      updateCell(cellId, { syntaxError: null })
+      return
+    }
+    try {
+      const res = await fetch(`${API}/workflow/check_syntax`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      })
+      const data = await res.json()
+      updateCell(cellId, { syntaxError: data.ok ? null : data.error })
+    } catch {
+      /* ignore network blips for live check */
+    }
+  }, [updateCell])
+
+  const scheduleSyntaxCheck = useCallback((cellId, source) => {
+    if (syntaxTimers.current[cellId]) clearTimeout(syntaxTimers.current[cellId])
+    syntaxTimers.current[cellId] = setTimeout(() => checkSyntax(cellId, source), 400)
+  }, [checkSyntax])
+
   const translateCell = useCallback(async (cellId) => {
-    const cell = cells.find(c => c.id === cellId)
+    const cell = cells.find((c) => c.id === cellId)
     if (!cell || !cell.input.trim()) {
-      toast.warning('Please enter some text before running.')
+      toast.warning('Enter natural language before running.')
       return
     }
     const num = executionCounter + 1
@@ -121,19 +136,13 @@ export default function App() {
       state: CELL_STATE.TRANSLATING,
       error: null,
       executionNumber: num,
-      balloonCount: 0,
-      balloonImages: [],
-      interpretTime: null,
       dslSource: '',
-      dslCells: null,
-      dslEditableCode: null,
-      dslExecOutput: null,
-      dslExecError: null,
-      dslGenerateTime: null,
-      dslExecTime: null,
+      nodes: null,
+      success: null,
+      interpretTime: null,
     })
     try {
-      const res = await fetch(`${API}/dsl/nl_to_dsl`, {
+      const res = await fetch(`${API}/workflow/nl_to_dsl`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -143,27 +152,28 @@ export default function App() {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'NL→DSL failed' }))
-        throw new Error(err.detail || 'NL→DSL failed')
+        throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail))
       }
       const data = await res.json()
       updateCell(cellId, {
         state: CELL_STATE.TRANSLATED,
         dslSource: data.dsl_source,
         translateTime: data.processing_time,
+        syntaxError: data.parse_ok === false ? data.parse_error : null,
       })
       if (data.parse_ok === false && data.parse_error) {
-        const tries = data.parse_attempts ?? 1
         toast.warning(
-          `After ${tries} attempt(s) the DSL still does not parse — edit the .ndsl or try again. ${data.parse_error}`,
+          `After ${data.parse_attempts ?? 1} attempt(s) DSL still does not parse — edit .wfl or retry. ${data.parse_error}`,
           { duration: 8000 },
         )
       } else {
         const attempts = data.parse_attempts ?? 1
-        const sub =
+        toast.success(
           attempts > 1
-            ? `Valid after ${attempts} LLM attempt(s) (parse repair). Run again for the interpreter.`
-            : 'Run again to start the interpreter (per-node code, verify, run).'
-        toast.success(sub, { duration: 4000 })
+            ? `Valid after ${attempts} attempt(s). Run again to interpret.`
+            : 'DSL ready — run again to interpret.',
+          { duration: 4000 },
+        )
       }
     } catch (err) {
       updateCell(cellId, { state: CELL_STATE.ERROR, error: err.message })
@@ -171,272 +181,116 @@ export default function App() {
     }
   }, [cells, executionCounter, updateCell])
 
-  // ── Text-mode: Stage 2 — DSL → interpreter (generate, verify, run per node) ─
   const interpretCell = useCallback(async (cellId) => {
-    const cell = cells.find(c => c.id === cellId)
+    const cell = cells.find((c) => c.id === cellId)
     if (!cell || !cell.dslSource?.trim()) {
-      toast.warning('No DSL yet — run Stage 1 first.')
+      toast.warning('No workflow DSL yet.')
       return
     }
+    const num = cell.executionNumber || executionCounter + 1
+    if (!cell.executionNumber) setExecutionCounter(num)
     const t0 = Date.now()
     updateCell(cellId, {
-      state: CELL_STATE.DSL_GENERATING,
+      state: CELL_STATE.INTERPRETING,
       error: null,
-      dslCells: null,
-      dslEditableCode: null,
-      dslExecOutput: null,
-      dslExecError: null,
-      dslGenerateTime: null,
-      dslExecTime: null,
-    })
-    try {
-      const res = await fetch(`${API}/dsl/run_text`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: cell.dslSource }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'DSL pipeline failed' }))
-        throw new Error(err.detail || 'DSL pipeline failed')
-      }
-      const data = await res.json()
-      const generateTime = ((Date.now() - t0) / 1000).toFixed(1)
-
-      const editableCode = data.cells
-        .map(node => {
-          const header = `# ── node: ${node.node_name} ──────────────────────────\n# intent: ${node.intent}\n`
-          const status = node.verified ? '' : '# ⚠️  UNVERIFIED\n'
-          return header + status + (node.code || '# (no code generated)')
-        })
-        .join('\n\n')
-
-      const finalState = data.success ? CELL_STATE.DSL_CODE_READY : CELL_STATE.DSL_PARTIAL
-      updateCell(cellId, {
-        state: finalState,
-        dslCells: data.cells,
-        dslEditableCode: editableCode,
-        dslGenerateTime: generateTime,
-      })
-
-      if (data.success) {
-        toast.success('Interpreter finished (per-node). Press Run for merged execution output.', { duration: 4000 })
-      } else {
-        const failed = data.cells.filter(c => !c.verified).length
-        toast.warning(`${failed} node${failed !== 1 ? 's' : ''} failed verification — you can still try Run to see output or errors.`)
-      }
-    } catch (err) {
-      updateCell(cellId, { state: CELL_STATE.DSL_ERROR, error: err.message })
-      toast.error(`Pipeline error: ${err.message}`)
-    }
-  }, [cells, updateCell])
-
-  // ── DSL-mode: Stage 1 — generate + verify code ────────────────────────────
-  const dslGenerateCell = useCallback(async (cellId) => {
-    const cell = cells.find(c => c.id === cellId)
-    if (!cell || !cell.dslSource.trim()) {
-      toast.warning('Please enter a pipeline before running.')
-      return
-    }
-    const num = executionCounter + 1
-    setExecutionCounter(num)
-    const t0 = Date.now()
-
-    updateCell(cellId, {
-      state:           CELL_STATE.DSL_GENERATING,
-      error:           null,
       executionNumber: num,
-      dslCells:        null,
-      dslEditableCode: null,
-      dslExecOutput:   null,
-      dslExecError:    null,
-      dslGenerateTime: null,
-      dslExecTime:     null,
+      nodes: null,
+      success: null,
+      interpretTime: null,
     })
-
     try {
-      const res = await fetch(`${API}/dsl/run_text`, {
+      const body = {
+        source: cell.dslSource,
+        notebook_history: buildNotebookHistory(cells, cellId),
+      }
+      // Text mode often has a free-form task in `input` — pass as {{task}}
+      if (cell.mode === 'text' && cell.input?.trim()) {
+        body.inputs = { task: cell.input.trim() }
+      }
+      const res = await fetch(`${API}/workflow/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: cell.dslSource }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'DSL run failed' }))
-        throw new Error(err.detail || 'DSL run failed')
+        const err = await res.json().catch(() => ({ detail: 'Workflow run failed' }))
+        throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail))
       }
       const data = await res.json()
-      const generateTime = ((Date.now() - t0) / 1000).toFixed(1)
-
-      // Build a single editable code string from all verified nodes
-      // separated by clear node headers so user knows which section is which
-      const editableCode = data.cells
-        .map(node => {
-          const header = `# ── node: ${node.node_name} ──────────────────────────\n# intent: ${node.intent}\n`
-          const status = node.verified ? '' : '# ⚠️  UNVERIFIED\n'
-          return header + status + (node.code || '# (no code generated)')
-        })
-        .join('\n\n')
-
-      const finalState = data.success ? CELL_STATE.DSL_CODE_READY : CELL_STATE.DSL_PARTIAL
+      const interpretTime = ((Date.now() - t0) / 1000).toFixed(1)
       updateCell(cellId, {
-        state:           finalState,
-        dslCells:        data.cells,
-        dslEditableCode: editableCode,
-        dslGenerateTime: generateTime,
+        state: data.success ? CELL_STATE.COMPLETE : CELL_STATE.PARTIAL,
+        nodes: data.nodes,
+        success: data.success,
+        interpretTime,
       })
-
       if (data.success) {
-        toast.success('Interpreter finished (per-node). Press Run for merged execution output.', { duration: 4000 })
+        toast.success('Workflow interpreted successfully.')
       } else {
-        const failed = data.cells.filter(c => !c.verified).length
-        toast.warning(`${failed} node${failed !== 1 ? 's' : ''} failed verification — you can still try Run.`)
+        const failed = data.nodes.filter((n) => !n.success).length
+        toast.warning(`${failed} node(s) failed — see output below.`)
       }
     } catch (err) {
-      updateCell(cellId, { state: CELL_STATE.DSL_ERROR, error: err.message })
-      toast.error(`DSL error: ${err.message}`)
+      updateCell(cellId, { state: CELL_STATE.ERROR, error: err.message })
+      toast.error(`Interpret failed: ${err.message}`)
     }
   }, [cells, executionCounter, updateCell])
 
-  // ── DSL-mode: Stage 2 — execute the (possibly edited) code ────────────────
-  const dslExecuteCell = useCallback(async (cellId) => {
-    const cell = cells.find(c => c.id === cellId)
-    if (!cell || !cell.dslEditableCode?.trim()) return
-
-    const t0 = Date.now()
-    updateCell(cellId, {
-      state:         CELL_STATE.DSL_EXECUTING,
-      dslExecOutput: null,
-      dslExecError:  null,
-      error:         null,
-    })
-
-    try {
-      const res = await fetch(`${API}/dsl/execute`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: cell.dslEditableCode }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Execution failed' }))
-        throw new Error(err.detail || 'Execution failed')
-      }
-      const data = await res.json()
-      const execTime = ((Date.now() - t0) / 1000).toFixed(1)
-
-      updateCell(cellId, {
-        state:         CELL_STATE.DSL_COMPLETE,
-        dslExecOutput: data.output,
-        dslExecError:  data.error,
-        dslExecTime:   execTime,
-      })
-
-      if (data.error) {
-        toast.warning('Code ran with errors — check the output.')
-      } else {
-        toast.success('Code executed successfully!')
-      }
-    } catch (err) {
-      updateCell(cellId, { state: CELL_STATE.DSL_ERROR, error: err.message })
-      toast.error(`Execution failed: ${err.message}`)
-    }
-  }, [cells, updateCell])
-
-  // ── Text-mode: combine stages (after dslExecuteCell exists) ───────────────
   const runTextCell = useCallback((cellId) => {
-    const cell = cells.find(c => c.id === cellId)
+    const cell = cells.find((c) => c.id === cellId)
     if (!cell) return
-    const restart = [
-      CELL_STATE.IDLE,
-      CELL_STATE.ERROR,
-      CELL_STATE.COMPLETE,
-      CELL_STATE.DSL_COMPLETE,
-      CELL_STATE.DSL_ERROR,
-    ].includes(cell.state)
-    if (restart) {
-      translateCell(cellId)
-    } else if (cell.state === CELL_STATE.TRANSLATED) {
-      interpretCell(cellId)
-    } else if (
-      cell.state === CELL_STATE.DSL_CODE_READY ||
-      cell.state === CELL_STATE.DSL_PARTIAL
-    ) {
-      dslExecuteCell(cellId)
-    }
-  }, [cells, translateCell, interpretCell, dslExecuteCell])
+    const restart = [CELL_STATE.IDLE, CELL_STATE.ERROR, CELL_STATE.COMPLETE, CELL_STATE.PARTIAL].includes(cell.state)
+    if (restart) translateCell(cellId)
+    else if (cell.state === CELL_STATE.TRANSLATED) interpretCell(cellId)
+  }, [cells, translateCell, interpretCell])
 
-  // ── DSL master run — routes between Stage 1 and Stage 2 ───────────────────
   const runDSLCell = useCallback((cellId) => {
-    const cell = cells.find(c => c.id === cellId)
+    const cell = cells.find((c) => c.id === cellId)
     if (!cell) return
-    if (
-      cell.state === CELL_STATE.IDLE ||
-      cell.state === CELL_STATE.DSL_ERROR ||
-      cell.state === CELL_STATE.DSL_COMPLETE
-    ) {
-      dslGenerateCell(cellId)
-    } else if (
-      cell.state === CELL_STATE.DSL_CODE_READY ||
-      cell.state === CELL_STATE.DSL_PARTIAL
-    ) {
-      dslExecuteCell(cellId)
-    }
-  }, [cells, dslGenerateCell, dslExecuteCell])
+    interpretCell(cellId)
+  }, [cells, interpretCell])
 
-  // ── Master run dispatcher ──────────────────────────────────────────────────
   const runCell = useCallback((cellId) => {
-    const cell = cells.find(c => c.id === cellId)
+    const cell = cells.find((c) => c.id === cellId)
     if (!cell) return
     cell.mode === 'dsl' ? runDSLCell(cellId) : runTextCell(cellId)
   }, [cells, runDSLCell, runTextCell])
 
-  // ── Toggle mode ────────────────────────────────────────────────────────────
   const toggleCellMode = useCallback((cellId) => {
-    const cell = cells.find(c => c.id === cellId)
+    const cell = cells.find((c) => c.id === cellId)
     if (!cell) return
     const newMode = cell.mode === 'text' ? 'dsl' : 'text'
     updateCell(cellId, {
-      mode:            newMode,
-      state:           CELL_STATE.IDLE,
-      error:           null,
-      dslCells:        null,
-      dslEditableCode: null,
-      dslExecOutput:   null,
-      dslExecError:    null,
-      balloonCount:    0,
-      balloonImages:   [],
+      mode: newMode,
+      state: CELL_STATE.IDLE,
+      error: null,
+      nodes: null,
+      success: null,
+      syntaxError: null,
     })
-    toast(`Switched to ${newMode === 'dsl' ? 'DSL' : 'Text'} mode.`, {
-      icon: newMode === 'dsl' ? '◈' : '≡',
-      duration: 1500,
-    })
+    toast(`Switched to ${newMode === 'dsl' ? 'DSL' : 'Text'} mode.`, { duration: 1500 })
   }, [cells, updateCell])
 
-  // ── Clear ──────────────────────────────────────────────────────────────────
   const clearCell = useCallback((cellId) => {
     updateCell(cellId, {
-      state:           CELL_STATE.IDLE,
-      dslSource:       '',
-      balloonCount:    0,
-      balloonImages:   [],
-      error:           null,
+      state: CELL_STATE.IDLE,
+      dslSource: '',
+      error: null,
       executionNumber: null,
-      translateTime:   null,
-      interpretTime:   null,
-      dslCells:        null,
-      dslEditableCode: null,
-      dslExecOutput:   null,
-      dslExecError:    null,
-      dslGenerateTime: null,
-      dslExecTime:     null,
+      translateTime: null,
+      interpretTime: null,
+      nodes: null,
+      success: null,
+      syntaxError: null,
     })
-    toast('Cell cleared.', { icon: '🧹', duration: 1500 })
+    toast('Cell cleared.', { duration: 1500 })
   }, [updateCell])
 
-  // ── Add / delete ───────────────────────────────────────────────────────────
   const addCellAfter = useCallback((afterId) => {
-    setCells(prev => {
+    setCells((prev) => {
       const newCell = createCell()
       if (!afterId) return [...prev, newCell]
-      const idx = prev.findIndex(c => c.id === afterId)
+      const idx = prev.findIndex((c) => c.id === afterId)
       if (idx === -1) return [...prev, newCell]
       const next = [...prev]
       next.splice(idx + 1, 0, newCell)
@@ -446,17 +300,17 @@ export default function App() {
       }, 50)
       return next
     })
-    toast('Cell added.', { icon: '➕', duration: 1500 })
+    toast('Cell added.', { duration: 1500 })
   }, [])
 
   const deleteCell = useCallback((cellId) => {
-    setCells(prev => {
+    setCells((prev) => {
       if (prev.length <= 1) {
         toast.warning('Cannot delete the last cell.')
         return prev
       }
-      const idx = prev.findIndex(c => c.id === cellId)
-      const next = prev.filter(c => c.id !== cellId)
+      const idx = prev.findIndex((c) => c.id === cellId)
+      const next = prev.filter((c) => c.id !== cellId)
       const focusIdx = Math.min(idx, next.length - 1)
       setTimeout(() => {
         const nextCell = next[focusIdx]
@@ -467,15 +321,18 @@ export default function App() {
       }, 50)
       return next
     })
-    toast('Cell deleted.', { icon: '🗑️', duration: 1500 })
+    toast('Cell deleted.', { duration: 1500 })
   }, [])
 
-  const setCellInput          = useCallback((id, v) => updateCell(id, { input: v }), [updateCell])
-  const setDSLSource          = useCallback((id, v) => updateCell(id, { dslSource: v }), [updateCell])
-  // ── Keyboard shortcuts ─────────────────────────────────────────────────────
+  const setCellInput = useCallback((id, v) => updateCell(id, { input: v }), [updateCell])
+  const setDSLSource = useCallback((id, v) => {
+    updateCell(id, { dslSource: v })
+    scheduleSyntaxCheck(id, v)
+  }, [updateCell, scheduleSyntaxCheck])
+
   useEffect(() => {
     const handler = (e) => {
-      if (e.ctrlKey && e.key === '/') { e.preventDefault(); setShowCommandBar(p => !p); return }
+      if (e.ctrlKey && e.key === '/') { e.preventDefault(); setShowCommandBar((p) => !p); return }
       if (e.key === 'Escape') { if (showCommandBar) { e.preventDefault(); setShowCommandBar(false) }; return }
       if (e.altKey && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault(); addCellAfter(focusedCellId || cells[cells.length - 1]?.id); return
@@ -510,10 +367,10 @@ export default function App() {
                   <rect width="28" height="28" rx="4" fill="#FF6B19" />
                   <text x="5" y="20" fontFamily="monospace" fontSize="14" fill="white" fontWeight="bold">Jn</text>
                 </svg>
-                <span className="text-lg font-semibold">Jupyter</span>
+                <span className="text-lg font-semibold">NotebookLM</span>
               </div>
               <Separator orientation="vertical" className="h-5" />
-              <span className="text-sm">Untitled.ipynb</span>
+              <span className="text-sm">Untitled.wfl.ipynb</span>
             </div>
             <div className="flex items-center gap-2">
               <Badge variant={statusVariant} className="gap-1.5 font-mono">
@@ -527,11 +384,8 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-1.5 px-4 py-1.5 bg-muted/50 border-t">
-            <Button variant="jupyter-ghost" size="xs">Cell</Button>
-            <Button variant="jupyter-ghost" size="xs">Kernel</Button>
-            <Separator orientation="vertical" className="h-4 mx-1" />
             <span className="text-xs text-muted-foreground font-mono">
-              Text: NL → DSL (parse repair) → interpreter → Run for output · DSL: write .ndsl → same
+              Text: NL → .wfl → interpret · DSL: write .wfl → interpret · OpenRouter via LiteLLM
             </span>
           </div>
         </header>
@@ -549,13 +403,12 @@ export default function App() {
                   onRun={() => runCell(cell.id)}
                   onTranslate={() => translateCell(cell.id)}
                   onInterpret={() => interpretCell(cell.id)}
-                  onDSLGenerate={() => dslGenerateCell(cell.id)}
-                  onDSLExecute={() => dslExecuteCell(cell.id)}
                   onClear={() => clearCell(cell.id)}
                   onDelete={() => deleteCell(cell.id)}
                   onToggleMode={() => toggleCellMode(cell.id)}
                   onInputChange={(v) => setCellInput(cell.id, v)}
                   onDSLSourceChange={(v) => setDSLSource(cell.id, v)}
+                  onDSLBlur={() => checkSyntax(cell.id, cell.dslSource)}
                   canDelete={cells.length > 1}
                 />
                 <div className="flex justify-center py-1 group">
@@ -585,7 +438,7 @@ export default function App() {
 
           <Separator className="mt-8" />
           <footer className="py-4 text-center text-xs text-muted-foreground font-mono">
-            LLM Notebook · FastAPI + vLLM + React · Text Mode + DSL Mode
+            NotebookLM · FastAPI + OpenRouter + React · Workflow DSL
           </footer>
         </main>
 

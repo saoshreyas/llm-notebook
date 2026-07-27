@@ -1,0 +1,19 @@
+# DSL mode — paste into a cell, then Interpret (Shift+Enter)
+# Or Text mode NL: see EXAMPLES.md
+
+workflow hello:
+  description: "single prompt smoke test"
+  config:
+    retries: 1
+
+  node greet:
+    kind: prompt
+    prompt: "In one short sentence, greet the user and mention the topic: {{task}}"
+    output: greeting
+
+  node stats:
+    kind: code
+    input: greeting
+    code: |
+      result = {"greeting": greeting, "chars": len(greeting), "words": len(greeting.split())}
+    output: result

@@ -1,0 +1,18 @@
+# Code-only — no LLM calls (good for checking the interpreter without OpenRouter)
+
+workflow math_only:
+  description: "pure Python nodes"
+
+  node compute:
+    kind: code
+    code: |
+      nums = [1, 2, 3, 4, 5]
+      result = {"sum": sum(nums), "mean": sum(nums) / len(nums)}
+    output: result
+
+  node report:
+    kind: code
+    input: result
+    code: |
+      result = f"sum={result['sum']}, mean={result['mean']}"
+    output: report

@@ -1,0 +1,21 @@
+# Two-step summarize → bullet points
+
+workflow summarize:
+  description: "summarize then extract bullets"
+  config:
+    retries: 1
+
+  node summary:
+    kind: prompt
+    prompt: |
+      Summarize the following text in 2 sentences.
+      Text: {{task}}
+    output: summary
+
+  node bullets:
+    kind: prompt
+    prompt: |
+      Turn this summary into exactly 3 short bullet points.
+      Summary: {{summary}}
+    input: summary
+    output: bullets

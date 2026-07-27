@@ -15,7 +15,7 @@ export default function InfoPanel() {
     <Alert variant="info" className="relative">
       <Info className="h-4 w-4" />
       <AlertTitle className="text-sm font-semibold">
-        Natural language → DSL → interpreter → output
+        Natural language → Workflow DSL → semantic interpreter → output
       </AlertTitle>
       <AlertDescription className="text-xs leading-relaxed space-y-3">
         <div className="rounded-md border border-[#BCE8F1]/60 bg-white/30 px-3 py-2 space-y-1.5">
@@ -24,53 +24,49 @@ export default function InfoPanel() {
           </p>
           <p className="text-[11px]">
             <span className="font-semibold text-foreground">Natural language</span>
-            {' — '}what you type as plain-English intent (goals, data, constraints).
+            {' — '}plain-English goals (tasks, constraints, agent steps).
           </p>
           <p className="text-[11px]">
-            <span className="font-semibold text-foreground">DSL (NotebookDSL)</span>
-            {' — '}structured <code className="text-[10px] font-mono">.ndsl</code> text:
-            pipelines, <code className="text-[10px] font-mono">node</code> blocks, and{' '}
-            <code className="text-[10px] font-mono">intent:</code> lines. Indentation is part of the
-            language syntax (not nested notebook cells—each cell here is one flat block).
+            <span className="font-semibold text-foreground">Workflow DSL (.wfl)</span>
+            {' — '}structured program: <code className="text-[10px] font-mono">workflow</code>,{' '}
+            <code className="text-[10px] font-mono">node</code> blocks with{' '}
+            <code className="text-[10px] font-mono">kind: prompt</code> or{' '}
+            <code className="text-[10px] font-mono">kind: code</code>. Indentation is language syntax
+            inside the cell — notebook cells themselves stay flat.
           </p>
           <p className="text-[11px]">
-            <span className="font-semibold text-foreground">Interpreter</span>
-            {' — '}parse DSL → for each node call the LLM to generate Python → checker verifies → run
-            code; on checker or runtime errors, feed them back and retry up to the configured limit.
+            <span className="font-semibold text-foreground">Semantic interpreter</span>
+            {' — '}does what the DSL means: prompt nodes call OpenRouter; code nodes run your Python.
+            No LLM code generation. Constraints may trigger a self-check retry.
           </p>
           <p className="text-[11px]">
             <span className="font-semibold text-foreground">Output</span>
-            {' — '}stdout, return values, and tracebacks from execution. Generated Python is run on the
-            server but not shown in the UI; you see results after <strong>Run</strong>.
+            {' — '}per-node results (text, values, stdout, errors) accumulated in the balloon for later nodes/cells.
           </p>
         </div>
 
         <ol className="list-decimal pl-4 space-y-1.5 text-[11px] text-foreground/90 marker:font-mono marker:text-[11px]">
           <li>
-            <strong>NL → DSL:</strong> LLM translates using a grammar cheat sheet and prior-cell
-            history. If the parser rejects the program, the server asks the model to fix it (same
-            endpoint, multiple attempts; override with env <code className="text-[10px] font-mono">NL_PARSE_MAX_ATTEMPTS</code>).
+            <strong>NL → DSL:</strong> LLM writes <code className="text-[10px] font-mono">.wfl</code> using
+            a grammar cheat sheet and prior-cell history. Parse failures are repaired automatically.
           </li>
           <li>
-            <strong>Interpreter:</strong> each node becomes code; errors include checker violations
-            and Python tracebacks so the model can correct before continuing.
+            <strong>Interpret:</strong> each node runs in order; prompt templates use double-brace variables that pull from earlier outputs.
           </li>
           <li>
-            <strong>Output:</strong> run the merged pipeline execution step to view printed and
-            returned results (and errors if any).
+            <strong>Review:</strong> edit the DSL before interpreting; inspect per-node outputs after.
           </li>
         </ol>
 
         <p className="text-[11px]">
           <strong>Text mode</strong> walks those steps with <Kbd>Shift+Enter</Kbd>.
-          <strong> DSL mode</strong> skips NL→DSL—you write <code className="text-[10px] font-mono">.ndsl</code>{' '}
-          directly, then the same interpreter and output flow applies.
+          <strong> DSL mode</strong> skips NL — write <code className="text-[10px] font-mono">.wfl</code> and interpret.
         </p>
 
         <p className="text-[10px] text-muted-foreground">
-          Point the backend at your OpenAI-compatible server with{' '}
-          <code className="font-mono">VLLM_BASE_URL</code> and choose a model with{' '}
-          <code className="font-mono">DEFAULT_MODEL</code> (e.g. a small instruct model for faster iteration).
+          Set <code className="font-mono">OPENROUTER_API_KEY</code> and{' '}
+          <code className="font-mono">DEFAULT_MODEL</code> (e.g.{' '}
+          <code className="font-mono">openrouter/openai/gpt-oss-20b:free</code>).
         </p>
 
         <Separator className="bg-[#BCE8F1]/50" />
@@ -78,12 +74,10 @@ export default function InfoPanel() {
         <div className="flex items-center gap-1 flex-wrap text-[10px] opacity-80">
           <Keyboard className="h-3 w-3 mr-0.5" />
           <Kbd>Shift+Enter</Kbd> run
-          <span className="mx-0.5">·</span>
+          <span className="mx-1">·</span>
           <Kbd>Alt+A</Kbd> add cell
-          <span className="mx-0.5">·</span>
-          <Kbd>Alt+D</Kbd> delete
-          <span className="mx-0.5">·</span>
-          <Kbd>Ctrl+/</Kbd> all shortcuts
+          <span className="mx-1">·</span>
+          <Kbd>Ctrl+/</Kbd> help
         </div>
       </AlertDescription>
     </Alert>

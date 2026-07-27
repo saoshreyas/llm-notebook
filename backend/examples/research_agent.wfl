@@ -1,0 +1,48 @@
+# Demo: LangGraph-like linear research agent
+# Run: notebooklm interpret backend/examples/research_agent.wfl --input task="What is NotebookLM?"
+
+workflow research_agent:
+  description: "plan, research, answer — semantic prompt nodes + code format"
+  config:
+    model: "openrouter/openai/gpt-oss-20b:free"
+    retries: 2
+  global:
+    constraint error: do not invent citations or URLs
+
+  node plan:
+    kind: prompt
+    prompt: "Task: {{task}}. Write a concise 3-step research plan. Number the steps."
+    output: plan
+
+  node research:
+    kind: prompt
+    prompt: |
+      Follow this plan and gather brief notes (bullet points).
+      Stay within the plan steps.
+
+      Plan:
+      {{plan}}
+
+      Task: {{task}}
+    input: plan
+    output: notes
+    constraint error: stay within the plan steps
+
+  node answer:
+    kind: prompt
+    prompt: |
+      Using only the notes below, answer the task in 2-4 short paragraphs.
+
+      Notes:
+      {{notes}}
+
+      Task: {{task}}
+    input: notes
+    output: answer
+
+  node format:
+    kind: code
+    input: answer
+    code: |
+      result = {"answer": answer, "length": len(answer)}
+    output: result
