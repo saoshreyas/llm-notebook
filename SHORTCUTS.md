@@ -1,44 +1,26 @@
-# Keyboard Shortcuts Reference
+# Keyboard Shortcuts
 
-## Cell Execution
+| Shortcut | Action |
+|----------|--------|
+| `Shift+Enter` | Run current cell (NL→DSL or interpret) |
+| `Ctrl+Enter` | Run cell and insert new cell below |
+| `Alt+A` | Add new cell below |
+| `Alt+D` | Delete focused cell |
+| `Ctrl+/` | Toggle shortcuts help |
+| `Esc` | Close dialogs |
 
-| Shortcut | Action | Details |
-|----------|--------|---------|
-| `Shift + Enter` | Run current cell | Translates if not yet run; interprets if already translated |
-| `Ctrl + Enter` | Run cell + add new | Runs the cell and inserts a new empty cell below |
+## Cell states
 
-## Cell Management
+| State | Meaning |
+|-------|---------|
+| Not executed | Idle |
+| NL → DSL | Translating natural language to `.wfl` |
+| DSL ready | Editable workflow — run again to interpret |
+| Interpreting | Semantic run in progress |
+| Complete / Partial | Finished (all or some nodes ok) |
+| Error | Failure |
 
-| Shortcut | Action | Details |
-|----------|--------|---------|
-| `Alt + A` | Add cell below | Inserts a new empty cell after the focused cell |
-| `Alt + D` | Delete cell | Deletes the focused cell (cannot delete last cell) |
+## Modes
 
-## Navigation & Help
-
-| Shortcut | Action | Details |
-|----------|--------|---------|
-| `Ctrl + /` | Toggle help | Opens/closes the shortcuts & help modal |
-| `Esc` | Close dialog | Closes any open modal or dialog |
-
-## Execution Flow
-
-```
-New cell (⚪ Not executed)
-    │
-    ├── Shift+Enter ──→ 🔵 Translating... ──→ 🟡 Translated
-    │                                              │
-    │                    Shift+Enter ◄──────────────┘
-    │                        │
-    │                        ▼
-    │                    🟣 Interpreting... ──→ 🟢 Complete
-    │
-    └── Clear ──→ ⚪ Not executed (start over)
-```
-
-## Tips
-
-- Click on a cell to focus it before using shortcuts
-- The run button label changes based on cell state ("Translate" vs "Interpret")
-- You can re-run a completed cell — it starts over from Stage 1
-- Hover between cells to reveal the "Insert Cell Below" button
+- **Text:** two-phase — translate, then interpret
+- **DSL:** write `.wfl` directly, then interpret

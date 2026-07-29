@@ -1,19 +1,46 @@
-node_modules/
-dist/
-build/
-.vite/
+# Secrets / local env
 .env
 .env.local
-npm-debug.log*
-yarn-error.log*
-.DS_Store
-Thumbs.db
+.env.*.local
+
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.pyo
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Generated start scripts (from setup.sh)
 start-backend.sh
 start-frontend.sh
 start-all.sh
 
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cursor (local)
+.cursor/

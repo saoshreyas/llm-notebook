@@ -1,0 +1,28 @@
+{% if repair_block %}
+=== PARSER REJECTION — FIX SYNTAX (attempt {{ parse_attempt }} / {{ parse_max_attempts }}) ===
+The previous output failed the Lark parser.
+
+Error:
+{{ parse_error }}
+
+Broken output:
+{{ failed_dsl }}
+
+Your task: emit ONE corrected Workflow DSL program that parses and preserves the same user intent below.
+Do not explain — raw program text only, same rules as always.
+
+{% endif %}
+=== WORKFLOW DSL QUICK REFERENCE ===
+{{ dsl_cheat_sheet }}
+
+=== SESSION / WORKFLOW CONTEXT ===
+{{ history_block }}
+
+=== USER REQUEST (natural language) ===
+{{ user_text }}
+
+Produce ONE valid Workflow DSL program that implements this request.
+Use a single `workflow` with a descriptive name and one or more `node` blocks.
+Prefer `kind: prompt` nodes with clear `prompt:` text and `{{var}}` placeholders.
+Use `kind: code` only when a small Python transform is needed.
+Each prompt node MUST include `prompt:`; use `output:` to name the result variable; use `input:` to chain prior outputs.

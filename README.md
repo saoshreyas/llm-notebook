@@ -1,158 +1,117 @@
-# LLM Notebook — Two-Stage Processing
+# NotebookLM
 
-A Jupyter-style interactive notebook that processes text through two stages using a vLLM backend.
+Jupyter-style notebook for **agentic workflows**: natural language → **Workflow DSL (`.wfl`)** → **semantic interpreter** (OpenRouter via LiteLLM).
 
-**Stage 1 — Translate:** Sends text to an LLM that converts it to lowercase.
-**Stage 2 — Interpret:** Counts the word "balloon" in the lowercased text and displays a balloon image for each occurrence.
-
----
-
-## Architecture
+Prompt nodes call the LLM. Code nodes run **your** Python. There is no LLM code-generation step.
 
 ```
-┌─────────────────────────────────┐
-│       React Frontend            │
-│  (Vite + Tailwind CSS)          │
-│  Port 3000                      │
-│                                 │
-│  ┌──────────┐ ┌──────────────┐  │
-│  │ Notebook  │ │  Command Bar │  │
-│  │ Cells     │ │  (Shortcuts) │  │
-│  └────┬─────┘ └──────────────┘  │
-│       │                         │
-└───────┼─────────────────────────┘
-        │  /api/translate
-        │  /api/interpret
-        ▼
-┌─────────────────────────────────┐
-│       FastAPI Backend           │
-│  (LiteLLM + Uvicorn)           │
-│  Port 8000                      │
-│                                 │
-│  POST /translate — Stage 1      │
-│  POST /interpret — Stage 2      │
-│  GET  /health    — Status       │
-│  GET  /models    — Model list   │
-└───────┬─────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────┐
-│       vLLM Server               │
-│  (User-provided, free)          │
-│  Any OpenAI-compatible endpoint │
-└─────────────────────────────────┘
+Natural language
+       ↓
+  Workflow DSL (.wfl)
+       ↓
+ Semantic interpreter  →  effects & output
 ```
 
-## Quick Start
+## Quick start
 
 ```bash
-# 1. Install dependencies
-./setup.sh
+# 1. Install (from repo root)
+pip install -e .
 
-# 2. Configure your vLLM server
-export VLLM_BASE_URL=http://your-server:8000/v1
-export DEFAULT_MODEL=meta-llama/Llama-2-7b-chat-hf
+# 2. Configure OpenRouter
+#    copy .env.example → set OPENROUTER_API_KEY
 
-# 3. Start everything
-./start-all.sh
+set OPENROUTER_API_KEY=sk-or-...
+set DEFAULT_MODEL=openrouter/openai/gpt-4o-mini
 
-# 4. Open http://localhost:3000
+# 3. API
+notebooklm app run
+# or: python -m notebooklm app run
+# → http://localhost:8000/docs
+
+# 4. Frontend (separate terminal)
+cd frontend
+npm install
+npm run dev
+# → http://localhost:3000
 ```
 
-## Tech Stack
+### Headless demo
 
-| Layer    | Technology                    |
-|----------|-------------------------------|
-| Frontend | React 18, Vite 5, Tailwind 3 |
-| Backend  | FastAPI, LiteLLM, Uvicorn    |
-| LLM      | vLLM (user-provided)         |
-| UI       | Jupyter-inspired, shadcn/ui  |
+```bash
+notebooklm interpret backend/examples/research_agent.wfl --input task="What is a semantic DSL?"
+# or
+python backend/examples/run_demo.py
+```
 
-## Two-Stage Execution
+### Library API
 
-Each cell goes through these states:
+```python
+import workflow_dsl  # registers the language
+from notebooklm import interpret
 
-| State | Indicator | Description |
-|-------|-----------|-------------|
-| Not executed | ⚪ Gray | Cell hasn't been run |
-| Translating | 🔵 Blue spinner | LLM is converting to lowercase |
-| Translated | 🟡 Yellow check | Stage 1 done, run again to interpret |
-| Interpreting | 🟣 Purple spinner | Counting balloons & generating images |
-| Complete | 🟢 Green check | Both stages finished |
-| Error | 🔴 Red | Something went wrong |
+result = interpret(
+    "workflow",
+    open("my_agent.wfl").read(),
+    inputs={"task": "..."},
+)
+print(result.summary())
+```
 
-**Run once** to translate. **Run again** to interpret. This is intentional — each stage is a separate execution.
+## Package layout
 
-## Keyboard Shortcuts
+| Package | Role |
+|---------|------|
+| `notebooklm` | SDK: registry, balloon context, OpenRouter client, CLI |
+| `workflow_dsl` | Grammar, Lark parser, semantic interpreter, NL→DSL |
+| `app` | FastAPI HTTP surface |
+| `frontend` | React Jupyter-style UI |
 
-| Shortcut | Action |
-|----------|--------|
-| `Shift+Enter` | Run current cell |
-| `Ctrl+Enter` | Run cell + insert new cell below |
-| `Alt+A` | Add new cell below |
-| `Alt+D` | Delete focused cell |
-| `Ctrl+/` | Toggle shortcuts help |
-| `Esc` | Close dialog |
+**DSL developer** owns `workflow_dsl`. **Platform developer** owns `notebooklm` + `app` + UI.
 
-## API Endpoints
+## Cell flow (UI)
+
+| Mode | Shift+Enter #1 | Shift+Enter #2 |
+|------|----------------|----------------|
+| Text | NL → editable `.wfl` | Interpret |
+| DSL | Interpret `.wfl` | — |
+
+## API
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/translate` | Stage 1: Lowercase text via LLM |
-| `POST` | `/interpret` | Stage 2: Count balloons, generate SVGs |
-| `POST` | `/process` | Legacy: Both stages at once |
-| `GET` | `/health` | Backend + vLLM status |
-| `GET` | `/models` | Available models |
+| `POST` | `/workflow/nl_to_dsl` | Natural language → `.wfl` |
+| `POST` | `/workflow/run` | Semantic interpret |
+| `POST` | `/workflow/check_syntax` | Lark parse only |
+| `GET` | `/health` | Status |
+| `GET` | `/models` | Suggested models |
 
-## Project Structure
+## Environment
 
-```
-├── backend/
-│   ├── main.py            # FastAPI application
-│   ├── requirements.txt   # Python dependencies
-│   └── README.md          # Backend docs
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx              # Main app with state management
-│   │   ├── components/
-│   │   │   ├── NotebookCell.jsx # Two-stage cell component
-│   │   │   ├── CommandBar.jsx   # Shortcuts help modal
-│   │   │   ├── InfoPanel.jsx    # Top info panel
-│   │   │   ├── Button.jsx       # Reusable button
-│   │   │   └── Card.jsx         # Reusable card
-│   │   ├── lib/utils.js         # Utility functions
-│   │   └── index.css            # Jupyter-style CSS
-│   ├── index.html
-│   ├── vite.config.js
-│   ├── tailwind.config.js
-│   └── package.json
-├── setup.sh                     # Automatic installer
-├── start-all.sh                 # Start both servers
-├── start-backend.sh             # Start backend only
-├── start-frontend.sh            # Start frontend only
-├── QUICKSTART.md
-├── CHANGELOG.md
-├── SHORTCUTS.md
-├── TROUBLESHOOTING.md
-└── architecture-diagram.svg
+| Variable | Description |
+|----------|-------------|
+| `OPENROUTER_API_KEY` | OpenRouter API key (default path) |
+| `DEFAULT_MODEL` | e.g. `openrouter/openai/gpt-4o-mini` |
+| `VLLM_BASE_URL` | Optional local OpenAI-compatible base URL |
+| `NL_PARSE_MAX_ATTEMPTS` | NL→DSL parse-repair attempts (default 3) |
+
+## Workflow DSL sketch
+
+```text
+workflow research_agent:
+  node plan:
+    kind: prompt
+    prompt: "Task: {{task}}. Write a 3-step plan."
+    output: plan
+  node format:
+    kind: code
+    input: plan
+    code: |
+      result = plan.upper()
+    output: result
 ```
 
-## What You Can / Can't Do
-
-**CAN do:**
-- Add unlimited cells
-- Delete any cell (except the last one)
-- Run cells in any order
-- Re-run cells multiple times
-- Clear output and restart
-- Edit input after running
-
-**CANNOT do:**
-- Delete the last remaining cell (always keeps at least 1)
-
-## Cost
-
-100% free. Uses your own vLLM server. All open-source components. No subscriptions or hidden fees.
+See [backend/workflow_dsl/README.md](backend/workflow_dsl/README.md) and [backend/examples/research_agent.wfl](backend/examples/research_agent.wfl).
 
 ## License
 

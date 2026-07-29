@@ -1,0 +1,92 @@
+// ============================================================
+//  Workflow DSL Grammar — lalr + contextual lexer
+//  File extension: .wfl
+//
+//  Semantic interpreter executes nodes directly (prompt → LLM,
+//  code → user-authored Python). No LLM codegen.
+// ============================================================
+
+start: workflow+
+
+workflow: KW_WORKFLOW NAME COLON _NEWLINE _INDENT workflow_body _DEDENT
+
+workflow_body: (description_stmt | config_block | global_block | node_block)+
+
+description_stmt: KW_DESCRIPTION COLON QSTRING _NEWLINE
+
+config_block: KW_CONFIG COLON _NEWLINE _INDENT config_stmt+ _DEDENT
+config_stmt: KW_MODEL   COLON QSTRING _NEWLINE -> config_model
+           | KW_RETRIES COLON INT     _NEWLINE -> config_retries
+           | KW_BACKEND COLON QSTRING _NEWLINE -> config_backend
+
+global_block: KW_GLOBAL COLON _NEWLINE _INDENT constraint_stmt+ _DEDENT
+
+node_block: KW_NODE NAME COLON _NEWLINE _INDENT node_body _DEDENT
+node_body: node_stmt+
+node_stmt: kind_stmt
+         | prompt_stmt
+         | code_stmt
+         | intent_stmt
+         | input_stmt
+         | output_stmt
+         | retries_stmt
+         | constraint_stmt
+
+kind_stmt: KW_KIND COLON KIND_VAL _NEWLINE
+
+prompt_stmt: KW_PROMPT COLON QSTRING _NEWLINE
+           | KW_PROMPT COLON PIPE _NEWLINE _INDENT block_body _DEDENT
+
+code_stmt: KW_CODE COLON QSTRING _NEWLINE
+         | KW_CODE COLON PIPE _NEWLINE _INDENT block_body _DEDENT
+
+block_body: block_line+
+block_line: CTEXT _NEWLINE
+
+intent_stmt : KW_INTENT  COLON QSTRING  _NEWLINE
+input_stmt  : KW_INPUT   COLON namelist _NEWLINE
+output_stmt : KW_OUTPUT  COLON NAME     _NEWLINE
+retries_stmt: KW_RETRIES COLON INT      _NEWLINE
+
+constraint_stmt: KW_CONSTRAINT severity COLON CTEXT _NEWLINE
+               | KW_CONSTRAINT COLON         CTEXT _NEWLINE
+
+severity: KW_ERROR | KW_WARNING | KW_INFO
+
+namelist: NAME (COMMA NAME)*
+
+KW_WORKFLOW   : "workflow"
+KW_NODE       : "node"
+KW_DESCRIPTION: "description"
+KW_CONFIG     : "config"
+KW_GLOBAL     : "global"
+KW_MODEL      : "model"
+KW_RETRIES    : "retries"
+KW_BACKEND    : "backend"
+KW_KIND       : "kind"
+KW_PROMPT     : "prompt"
+KW_CODE       : "code"
+KW_INTENT     : "intent"
+KW_INPUT      : "input"
+KW_OUTPUT     : "output"
+KW_CONSTRAINT : "constraint"
+KW_ERROR      : "error"
+KW_WARNING    : "warning"
+KW_INFO       : "info"
+
+KIND_VAL: "prompt" | "code"
+PIPE    : "|"
+COLON   : ":"
+COMMA   : ","
+QSTRING : ESCAPED_STRING
+CTEXT   : /[^\n]+/
+INT     : /[0-9]+/
+NAME    : /[a-zA-Z_][a-zA-Z0-9_]*/
+
+%import common.ESCAPED_STRING
+%import common.WS_INLINE
+%ignore WS_INLINE
+COMMENT: /#[^\n]*/
+%ignore COMMENT
+_NEWLINE: /(\r?\n[\t ]*)+/
+%declare _INDENT _DEDENT
