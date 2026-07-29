@@ -1,6 +1,6 @@
 # NotebookLM
 
-Jupyter-style notebook for **agentic workflows**: natural language → **Workflow DSL (`.wfl`)** → **semantic interpreter** (OpenRouter via LiteLLM).
+Jupyter-style notebook for **agentic workflows**: natural language → **Workflow DSL (`.wfl`)** → **semantic interpreter** (Ollama Cloud via LiteLLM).
 
 Prompt nodes call the LLM. Code nodes run **your** Python. There is no LLM code-generation step.
 
@@ -14,26 +14,75 @@ Natural language
 
 ## Quick start
 
+### 1. Configure Ollama Cloud
+
+Copy `.env.example` → `.env` and set your [Ollama Cloud API key](https://ollama.com/settings/keys):
+
+```env
+OLLAMA_API_KEY=your-ollama-key
+OPENAI_API_KEY=your-ollama-key
+VLLM_BASE_URL=https://ollama.com/v1
+DEFAULT_MODEL=gpt-oss:20b
+```
+
+Or export in the shell for the current session:
+
+**Linux / macOS**
+
 ```bash
-# 1. Install (from repo root)
+export OLLAMA_API_KEY="your-ollama-key"
+export OPENAI_API_KEY="$OLLAMA_API_KEY"
+export VLLM_BASE_URL="https://ollama.com/v1"
+export DEFAULT_MODEL="gpt-oss:20b"
+```
+
+**Windows (PowerShell)**
+
+```powershell
+$env:OLLAMA_API_KEY="your-ollama-key"
+$env:OPENAI_API_KEY=$env:OLLAMA_API_KEY
+$env:VLLM_BASE_URL="https://ollama.com/v1"
+$env:DEFAULT_MODEL="gpt-oss:20b"
+```
+
+### 2. Install + single-command startup
+
+**Linux / macOS**
+
+```bash
 pip install -e .
+./setup.sh          # install deps + create start-*.sh
+./start-all.sh      # backend + frontend
+```
 
-# 2. Configure OpenRouter
-#    copy .env.example → set OPENROUTER_API_KEY
+**Windows (PowerShell)**
 
-set OPENROUTER_API_KEY=sk-or-...
-set DEFAULT_MODEL=openrouter/openai/gpt-4o-mini
+```powershell
+pip install -e .
+.\setup.ps1         # install deps + create start-*.ps1
+.\start-all.ps1     # backend + frontend
+```
 
-# 3. API
+Then open:
+
+- UI → http://localhost:3000
+- API docs → http://localhost:8000/docs
+
+`setup.sh` / `setup.ps1` create `start-all` plus separate backend/frontend starters. After setup, use **`./start-all.sh`** or **`.\start-all.ps1`** as the one-command startup.
+
+### Manual start (two terminals)
+
+Works the same on Linux and Windows once the package is installed:
+
+```bash
+# Terminal 1 — API
 notebooklm app run
 # or: python -m notebooklm app run
-# → http://localhost:8000/docs
 
-# 4. Frontend (separate terminal)
+# Terminal 2 — UI
 cd frontend
 npm install
 npm run dev
-# → http://localhost:3000
 ```
 
 ### Headless demo
@@ -62,7 +111,7 @@ print(result.summary())
 
 | Package | Role |
 |---------|------|
-| `notebooklm` | SDK: registry, balloon context, OpenRouter client, CLI |
+| `notebooklm` | SDK: registry, balloon context, LiteLLM client (Ollama Cloud), CLI |
 | `workflow_dsl` | Grammar, Lark parser, semantic interpreter, NL→DSL |
 | `app` | FastAPI HTTP surface |
 | `frontend` | React Jupyter-style UI |
@@ -90,9 +139,10 @@ print(result.summary())
 
 | Variable | Description |
 |----------|-------------|
-| `OPENROUTER_API_KEY` | OpenRouter API key (default path) |
-| `DEFAULT_MODEL` | e.g. `openrouter/openai/gpt-4o-mini` |
-| `VLLM_BASE_URL` | Optional local OpenAI-compatible base URL |
+| `OLLAMA_API_KEY` | Ollama Cloud API key ([create one](https://ollama.com/settings/keys)) |
+| `OPENAI_API_KEY` | Same key as above (LiteLLM OpenAI-compatible path reads this) |
+| `VLLM_BASE_URL` | `https://ollama.com/v1` for Ollama Cloud |
+| `DEFAULT_MODEL` | e.g. `gpt-oss:20b` |
 | `NL_PARSE_MAX_ATTEMPTS` | NL→DSL parse-repair attempts (default 3) |
 
 ## Workflow DSL sketch
