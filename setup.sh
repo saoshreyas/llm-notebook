@@ -1,73 +1,114 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 echo "========================================"
-echo "  NotebookLM - Setup"
+echo "  LLM Notebook - Production Launcher"
 echo "========================================"
-echo ""
 
-command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required."; exit 1; }
-command -v node    >/dev/null 2>&1 || { echo "ERROR: node is required (v18+)."; exit 1; }
-command -v npm     >/dev/null 2>&1 || { echo "ERROR: npm is required."; exit 1; }
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$ROOT_DIR/backend"
+FRONTEND_DIR="$ROOT_DIR/frontend"
+VENV_DIR="$ROOT_DIR/venv"
 
-echo "python3 $(python3 --version 2>&1 | awk '{print $2}')"
-echo "node    $(node --version)"
-echo "npm     $(npm --version)"
-echo ""
+BACKEND_PID=""
+FRONTEND_PID=""
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-cd "$ROOT"
+# ─────────────────────────────────────────
+# Cleanup on exit (CRITICAL)
+# ─────────────────────────────────────────
+cleanup() {
+  echo ""
+  echo "Shutting down services..."
 
-echo "-- Installing Python package (editable) --"
-pip install -e . -q 2>/dev/null || pip install -e . --no-deps -q
-pip install -r backend/requirements.txt -q 2>/dev/null || true
-echo "OK: Python package"
-echo ""
+  [[ -n "${BACKEND_PID}" ]] && kill "$BACKEND_PID" 2>/dev/null || true
+  [[ -n "${FRONTEND_PID}" ]] && kill "$FRONTEND_PID" 2>/dev/null || true
 
-echo "-- Installing frontend dependencies --"
-cd frontend
-npm install --silent
-echo "OK: Frontend"
-cd "$ROOT"
-echo ""
+  echo "Done."
+}
+trap cleanup EXIT INT TERM
 
-cat > start-backend.sh << 'SCRIPT'
-#!/usr/bin/env bash
-cd "$(dirname "$0")"
-echo "Starting NotebookLM API on http://localhost:8000 ..."
-python3 -m notebooklm app run
-SCRIPT
-chmod +x start-backend.sh
+# ─────────────────────────────────────────
+# Preflight checks
+# ─────────────────────────────────────────
+command -v python3 >/dev/null || { echo "python3 missing"; exit 1; }
+command -v node >/dev/null || { echo "node missing (install v18+)"; exit 1; }
+command -v npm >/dev/null || { echo "npm missing"; exit 1; }
 
-cat > start-frontend.sh << 'SCRIPT'
-#!/usr/bin/env bash
-cd "$(dirname "$0")/frontend"
-echo "Starting frontend on http://localhost:3000 ..."
-npx vite --host 0.0.0.0 --port 3000
-SCRIPT
-chmod +x start-frontend.sh
+echo "✓ System dependencies OK"
 
-cat > start-all.sh << 'SCRIPT'
-#!/usr/bin/env bash
-echo "Starting NotebookLM (backend + frontend) ..."
-cd "$(dirname "$0")"
-bash start-backend.sh &
+# ─────────────────────────────────────────
+# Python environment (REAL FIX)
+# ─────────────────────────────────────────
+echo "Setting up Python environment..."
+
+if [[ ! -d "$VENV_DIR" ]]; then
+  python3 -m venv "$VENV_DIR"
+fi
+
+source "$VENV_DIR/bin/activate"
+
+python -m pip install --upgrade pip -q
+python -m pip install -r "$ROOT_DIR/requirements.txt" -q
+
+echo "✓ Backend dependencies ready"
+
+# ─────────────────────────────────────────
+# Frontend dependencies
+# ─────────────────────────────────────────
+echo "Setting up frontend..."
+
+cd "$FRONTEND_DIR"
+
+if [[ ! -d "node_modules" ]]; then
+  npm install
+fi
+
+echo "✓ Frontend dependencies ready"
+
+# ─────────────────────────────────────────
+# Start backend (stable uvicorn config)
+# ─────────────────────────────────────────
+echo "Starting backend..."
+
+cd "$BACKEND_DIR"
+
+# IMPORTANT: adjust if your entry file differs
+if [[ -f "main.py" ]]; then
+  BACKEND_CMD="main:app"
+elif [[ -f "app.py" ]]; then
+  BACKEND_CMD="app:app"
+else
+  echo "ERROR: Cannot find backend entry point (main.py/app.py)"
+  exit 1
+fi
+
+uvicorn "$BACKEND_CMD" \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --reload &
 BACKEND_PID=$!
-bash start-frontend.sh
-FRONTEND_STATUS=$?
-kill $BACKEND_PID 2>/dev/null
-exit $FRONTEND_STATUS
-SCRIPT
-chmod +x start-all.sh
 
-echo "Created start-backend.sh / start-frontend.sh / start-all.sh"
+# ─────────────────────────────────────────
+# Start frontend (Vite stable mode)
+# ─────────────────────────────────────────
+echo "Starting frontend..."
+
+cd "$FRONTEND_DIR"
+
+npm run dev -- --host 127.0.0.1 --port 3000 &
+FRONTEND_PID=$!
+
+# ─────────────────────────────────────────
+# Ready state
+# ─────────────────────────────────────────
 echo ""
-echo "Quick start:"
-echo "  1. export OPENROUTER_API_KEY=sk-or-..."
-echo "     export DEFAULT_MODEL=openrouter/openai/gpt-4o-mini"
-echo "  2. ./start-all.sh"
-echo "  3. Open http://localhost:3000"
+echo "========================================"
+echo "  🚀 SYSTEM RUNNING"
+echo "========================================"
+echo "Frontend → http://localhost:3000"
+echo "Backend  → http://localhost:8000"
+echo "Docs     → http://localhost:8000/docs"
+echo "========================================"
 echo ""
-echo "CLI demo:"
-echo "  notebooklm interpret backend/examples/research_agent.wfl --input task='...'"
-echo ""
+
+wait "$BACKEND_PID" "$FRONTEND_PID"
