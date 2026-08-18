@@ -6,33 +6,49 @@
 - Node.js 18+
 - An [Ollama Cloud](https://ollama.com/settings/keys) API key
 
-## 1. Install
+## 1. Configure
+
+Copy `.env.example` → `.env`, or set for the current session:
+
+**Linux / macOS**
 
 ```bash
-pip install -e .
-cd frontend && npm install && cd ..
+export OLLAMA_API_KEY="your-ollama-key"
+export OPENAI_API_KEY="$OLLAMA_API_KEY"
+export VLLM_BASE_URL="https://ollama.com/v1"
+export DEFAULT_MODEL="gpt-oss:20b"
 ```
 
-## 2. Configure
-
-Put your key in the repo-root **`.env`** file (already created; gitignored):
-
-```env
-OLLAMA_API_KEY=your_key_here
-DEFAULT_MODEL=gpt-oss:20b
-OLLAMA_API_BASE=https://ollama.com
-```
-
-Or set them in the shell:
+**Windows (PowerShell)**
 
 ```powershell
-$env:OLLAMA_API_KEY="your_key_here"
+$env:OLLAMA_API_KEY="your-ollama-key"
+$env:OPENAI_API_KEY=$env:OLLAMA_API_KEY
+$env:VLLM_BASE_URL="https://ollama.com/v1"
 $env:DEFAULT_MODEL="gpt-oss:20b"
 ```
 
-Create a key at https://ollama.com/settings/keys
+## 2. Install + start (single command)
 
-## 3. Run
+**Linux / macOS**
+
+```bash
+pip install -e .
+./setup.sh
+./start-all.sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+pip install -e .
+.\setup.ps1
+.\start-all.ps1
+```
+
+Open http://localhost:3000 (API docs: http://localhost:8000/docs).
+
+## 3. Manual start (two terminals)
 
 ```bash
 python start.py
@@ -46,10 +62,9 @@ notebooklm app run
 
 # Terminal 2 — UI
 cd frontend
+npm install
 npm run dev
 ```
-
-Open http://localhost:3000
 
 ## 4. Try it
 

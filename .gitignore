@@ -29,10 +29,13 @@ npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Generated start scripts (from setup.sh)
+# Generated start scripts (from setup.sh / setup.ps1)
 start-backend.sh
 start-frontend.sh
 start-all.sh
+start-backend.ps1
+start-frontend.ps1
+start-all.ps1
 
 # OS / editor
 .DS_Store
