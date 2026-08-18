@@ -3,6 +3,8 @@ Parse .wfl source → Program AST.
 """
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Union
 
@@ -12,6 +14,10 @@ from lark.indenter import Indenter
 from workflow_dsl.ast_nodes import Config, Constraint, Node, Program, Workflow
 
 _GRAMMAR_PATH = Path(__file__).parent / "grammar.lark"
+
+# `prompt: |` / `code: |` headers — body may contain nested Python indents that
+# would otherwise emit extra _INDENT tokens and break the Lark Indenter.
+_PIPE_HEADER = re.compile(r"^([ \t]*)(prompt|code)[ \t]*:[ \t]*\|[ \t]*$")
 
 
 class WFLIndenter(Indenter):
@@ -25,9 +31,12 @@ class WFLIndenter(Indenter):
 
 def _unquote(s: str) -> str:
     s = s.strip()
-    if (s.startswith('"') and s.endswith('"')) or (
-        s.startswith("'") and s.endswith("'")
-    ):
+    if s.startswith('"') and s.endswith('"'):
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            return s[1:-1]
+    if s.startswith("'") and s.endswith("'"):
         return s[1:-1]
     return s
 
@@ -46,6 +55,49 @@ def _dedent_block(lines: list[str]) -> str:
         ln[min_indent:] if len(ln) >= min_indent else ln.lstrip(" ")
         for ln in lines
     ).rstrip("\n")
+
+
+def _flatten_pipe_blocks(source: str) -> str:
+    """
+    Rewrite `prompt: |` / `code: |` blocks into single-line quoted strings.
+
+    Nested indentation inside those blocks (e.g. Python `for`/`if`) is legal
+    source but illegal for Lark's Indenter, which would emit extra _INDENT.
+    """
+    lines = source.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = _PIPE_HEADER.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        indent, key = m.group(1), m.group(2)
+        header_indent = len(indent.replace("\t", " " * 2))
+        i += 1
+        body: list[str] = []
+        while i < len(lines):
+            ln = lines[i]
+            if not ln.strip():
+                body.append(ln)
+                i += 1
+                continue
+            expanded = ln.replace("\t", " " * 2)
+            lead = len(expanded) - len(expanded.lstrip(" "))
+            if lead > header_indent:
+                body.append(ln)
+                i += 1
+                continue
+            break
+
+        while body and not body[-1].strip():
+            body.pop()
+
+        content = _dedent_block(body)
+        out.append(f"{indent}{key}: {json.dumps(content)}")
+    return "\n".join(out)
 
 
 @v_args(inline=True)
@@ -199,7 +251,7 @@ def _preprocess(source: str) -> str:
         lines.append(line)
     while lines and not lines[0].strip():
         lines.pop(0)
-    return "\n".join(lines)
+    return _flatten_pipe_blocks("\n".join(lines))
 
 
 _PARSER: Lark | None = None

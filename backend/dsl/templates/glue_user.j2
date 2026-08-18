@@ -1,0 +1,23 @@
+=== NOTEBOOKDSL REFERENCE ===
+{{ dsl_cheat_sheet }}
+
+=== PRIOR NOTEBOOK CONTEXT ===
+{{ history_block }}
+
+=== USER GOAL ===
+{{ goal }}
+
+=== LOW-LEVEL PARTS TO GLUE (names + what each does) ===
+{{ parts }}
+
+Produce ONE complete .ndsl program that connects these parts in a sensible order.
+Add only the nodes needed — do not duplicate parts. Use 2-space indentation.
+{% if repair_block %}
+=== REPAIR (previous output did not parse) ===
+{{ parse_error }}
+
+Failed program:
+{{ failed_dsl }}
+
+Emit ONE corrected .ndsl program.
+{% endif %}

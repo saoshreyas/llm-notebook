@@ -78,3 +78,32 @@ workflow x:
 def test_invalid_syntax():
     with pytest.raises(Exception):
         parse_string("not a workflow\n")
+
+
+def test_parse_nested_python_in_code_block():
+    """Nested indents inside code: | used to confuse Lark's Indenter."""
+    src = """
+workflow unit_economics:
+  node make:
+    kind: code
+    code: |
+      rows = []
+      for i in range(6):
+          rows.append({"m": i})
+          if i > 2:
+              rows[-1]["flag"] = True
+      result = rows
+    output: rows
+"""
+    n = parse_string(src).workflows[0].nodes[0]
+    assert "for i in range(6):" in (n.code or "")
+    assert 'rows.append({"m": i})' in (n.code or "")
+    assert "if i > 2:" in (n.code or "")
+
+
+def test_parse_examples_still_work():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "backend" / "examples"
+    for name in ("research_agent.wfl", "math_only.wfl", "hello.wfl"):
+        parse_string((root / name).read_text(encoding="utf-8"))

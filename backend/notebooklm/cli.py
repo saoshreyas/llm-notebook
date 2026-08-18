@@ -88,8 +88,8 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("PORT", "8000")),
-        help="Port (default: 8000 or $PORT)",
+        default=int(os.environ.get("PORT", "8080")),
+        help="Port (default: 8080 or $PORT)",
     )
     run_p.set_defaults(func=cmd_app_run)
 

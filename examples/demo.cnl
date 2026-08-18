@@ -1,0 +1,5 @@
+# Simple CNL — transpiles to .ndsl (no LLM needed for translation)
+pipeline sales_report
+  code build_data: create a dict with sample revenue and units lists
+  code compute_stats using build_data: compute mean of the revenue list
+  llm explain using compute_stats: two sentences for my advisor about the statistics

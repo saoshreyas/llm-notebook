@@ -1,0 +1,26 @@
+# Mixed code + LLM pipeline (runs locally with your vLLM endpoint)
+pipeline sales_summary:
+  description: "Load sample metrics, compute stats, then LLM explains them"
+
+  config:
+    retries: 2
+
+  global:
+    constraint error: never use subprocess or eval
+    constraint error: only use stdlib (no pandas required for this demo)
+
+  node build_data:
+    kind: code
+    intent: "create a dict named build_data with keys revenue and units as lists of 5 small integers"
+    output: "dict"
+
+  node compute_stats:
+    kind: code
+    intent: "compute mean of revenue list and store in compute_stats dict with key mean_revenue"
+    input: build_data
+    output: "dict"
+
+  node explain:
+    kind: llm
+    prompt: "In 2-3 sentences, explain these statistics for a business stakeholder. Use only the numbers provided."
+    input: compute_stats

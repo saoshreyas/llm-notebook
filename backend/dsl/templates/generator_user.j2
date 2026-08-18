@@ -1,0 +1,18 @@
+{{ balloon_summary }}
+
+=== YOUR TASK ===
+Node    : {{ node.name }}
+Intent  : {{ node.intent }}
+Inputs  : {{ inputs_list }}
+Output  : {{ output_type }}
+{{ input_hint }}
+
+=== CURRENT INPUT VALUES ===
+{{ input_values }}
+
+=== CONSTRAINTS (satisfy ALL of these) ===
+{{ constraints_text }}
+{{ retry_block }}
+{{ exec_error_block }}
+Write ONLY the Python code. Assign the final result to a variable called `{{ node.name }}`.
+No markdown, no explanation, no fences.

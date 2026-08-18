@@ -27,7 +27,6 @@ workflow research_agent:
   description: "plan then answer"
   config:
     retries: 2
-    model: "openrouter/openai/gpt-oss-20b:free"
   global:
     constraint error: do not invent citations
   node plan:
@@ -58,7 +57,8 @@ Rules:
 - `output:` names the variable for later {{templating}} / inputs.
 - `input:` lists prior output names.
 - Use {{var}} in prompts for substitution.
-- Optional: intent: (docs only), constraint error/warning/info, config model/retries.
+- Optional: intent: (docs only), constraint error/warning/info, config retries.
+- Do NOT set config.model unless the user explicitly asks; the server default is used.
 """
 
 

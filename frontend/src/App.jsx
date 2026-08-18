@@ -85,7 +85,7 @@ export default function App() {
           ok: ready,
           checking: false,
           message: ready
-            ? (data.openrouter_configured ? 'OpenRouter' : (data.vllm_base_url ? 'vLLM' : 'API Ready'))
+            ? (data.ollama_configured ? 'Ollama Cloud' : (data.openrouter_configured ? 'OpenRouter' : (data.vllm_base_url ? 'vLLM' : 'API Ready')))
             : 'Unhealthy',
         })
       } catch {

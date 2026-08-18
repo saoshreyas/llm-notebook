@@ -4,7 +4,6 @@
 workflow research_agent:
   description: "plan, research, answer — semantic prompt nodes + code format"
   config:
-    model: "openrouter/openai/gpt-oss-20b:free"
     retries: 2
   global:
     constraint error: do not invent citations or URLs

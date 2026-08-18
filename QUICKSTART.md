@@ -4,7 +4,7 @@
 
 - Python 3.10+
 - Node.js 18+
-- An [OpenRouter](https://openrouter.ai/) API key
+- An [Ollama Cloud](https://ollama.com/settings/keys) API key
 
 ## 1. Install
 
@@ -15,15 +15,30 @@ cd frontend && npm install && cd ..
 
 ## 2. Configure
 
-```bash
-# Windows PowerShell
-$env:OPENROUTER_API_KEY="sk-or-..."
-$env:DEFAULT_MODEL="openrouter/openai/gpt-4o-mini"
+Put your key in the repo-root **`.env`** file (already created; gitignored):
+
+```env
+OLLAMA_API_KEY=your_key_here
+DEFAULT_MODEL=gpt-oss:20b
+OLLAMA_API_BASE=https://ollama.com
 ```
 
-Or copy `.env.example` and export the variables in your shell.
+Or set them in the shell:
+
+```powershell
+$env:OLLAMA_API_KEY="your_key_here"
+$env:DEFAULT_MODEL="gpt-oss:20b"
+```
+
+Create a key at https://ollama.com/settings/keys
 
 ## 3. Run
+
+```bash
+python start.py
+```
+
+Or separately:
 
 ```bash
 # Terminal 1 — API
@@ -57,7 +72,10 @@ python main.py
 
 ## FAQ
 
-**Q: Can I use a local vLLM server?**  
+**Q: Can I use OpenRouter instead?**  
+A: Set `OPENROUTER_API_KEY` and `DEFAULT_MODEL=openrouter/openai/gpt-4o-mini` (leave `OLLAMA_API_KEY` unset).
+
+**Q: Can I use a local vLLM / Ollama server?**  
 A: Set `VLLM_BASE_URL=http://host:port/v1` and point `DEFAULT_MODEL` at a model that server serves.
 
 **Q: Where is generated Python?**  
