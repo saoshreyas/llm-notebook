@@ -31,10 +31,11 @@ notebooklm = "notebooklm.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["backend"]
-include = ["notebooklm*", "workflow_dsl*", "app*"]
+include = ["notebooklm*", "workflow_dsl*", "app*", "dsl*"]
 
 [tool.setuptools.package-data]
 workflow_dsl = ["grammar.lark", "templates/*.j2"]
+dsl = ["grammar.lark", "templates/*.j2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
